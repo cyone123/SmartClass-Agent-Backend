@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import operator
 import os
-import threading
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from typing import Annotated, Literal, TypedDict
-from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
+from fastapi import Request
 from langchain.tools import tool
 from langchain_core.messages import (
     AIMessage,
@@ -19,10 +19,10 @@ from langchain_core.messages import (
 )
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
-from psycopg import Connection
-from psycopg.rows import dict_row
+
+from app.dependencies.db import close_agent_checkpointer, init_agent_checkpointer
 
 load_dotenv()
 
@@ -32,12 +32,6 @@ SYSTEM_PROMPT = (
 )
 CHECKPOINT_NAMESPACE = "chat"
 
-_agent_graph = None
-_streaming_agent_graph = None
-_checkpointer: PostgresSaver | None = None
-_checkpoint_connection: Connection | None = None
-_init_lock = threading.Lock()
-
 
 def get_model(*, streaming: bool = False) -> ChatOpenAI:
     return ChatOpenAI(
@@ -46,26 +40,6 @@ def get_model(*, streaming: bool = False) -> ChatOpenAI:
         base_url=os.getenv("BASE_URL"),
         streaming=streaming,
     )
-
-
-def get_postgres_conn_string() -> str:
-    database_url = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
-    if database_url:
-        return database_url
-
-    raw_host = os.getenv("DB_HOST", "localhost")
-    parsed = urlparse(raw_host if "://" in raw_host else f"//{raw_host}")
-    host = parsed.hostname or raw_host.split(":")[0]
-    port = parsed.port or int(os.getenv("DB_PORT", "5432"))
-    database = os.getenv("DB_NAME") or os.getenv("POSTGRES_DB") or "postgres"
-    user = quote(os.getenv("DB_USER", "postgres"))
-    password = quote(os.getenv("DB_PASSWORD", ""))
-    sslmode = os.getenv("DB_SSLMODE")
-
-    conn_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
-    if sslmode:
-        conn_string = f"{conn_string}?sslmode={sslmode}"
-    return conn_string
 
 
 @tool(description="Add two numbers together")
@@ -100,8 +74,8 @@ def _build_model_with_tools(*, streaming: bool = False):
 def llm_call_node_factory(*, streaming: bool = False):
     model_with_tools = _build_model_with_tools(streaming=streaming)
 
-    def llm_call_node(state: MessageState) -> MessageState:
-        response = model_with_tools.invoke(
+    async def llm_call_node(state: MessageState) -> MessageState:
+        response = await model_with_tools.ainvoke(
             [SystemMessage(content=SYSTEM_PROMPT), *state["messages"]]
         )
         return {"messages": [response]}
@@ -126,9 +100,7 @@ def tool_call_node(state: MessageState) -> dict[str, list[ToolMessage]]:
             except Exception as exc:
                 content = f"Tool '{tool_name}' failed: {exc}"
 
-        results.append(
-            ToolMessage(content=content, tool_call_id=tool_call["id"])
-        )
+        results.append(ToolMessage(content=content, tool_call_id=tool_call["id"]))
 
     return {"messages": results}
 
@@ -140,7 +112,7 @@ def should_continue(state: MessageState) -> Literal["tool_call", END]:
     return END
 
 
-def build_agent_graph(*, streaming: bool = False, checkpointer: PostgresSaver):
+def build_agent_graph(*, streaming: bool = False, checkpointer: AsyncPostgresSaver):
     agent_builder = StateGraph(MessageState)
     agent_builder.add_node("llm_call", llm_call_node_factory(streaming=streaming))
     agent_builder.add_node("tool_call", tool_call_node)
@@ -157,36 +129,6 @@ def build_agent_graph(*, streaming: bool = False, checkpointer: PostgresSaver):
     agent_builder.add_edge("tool_call", "llm_call")
 
     return agent_builder.compile(checkpointer=checkpointer)
-
-
-def _ensure_graphs():
-    global _agent_graph
-    global _streaming_agent_graph
-    global _checkpointer
-    global _checkpoint_connection
-
-    if _agent_graph is not None and _streaming_agent_graph is not None:
-        return
-
-    with _init_lock:
-        if _agent_graph is not None and _streaming_agent_graph is not None:
-            return
-
-        if _checkpointer is None:
-            _checkpoint_connection = Connection.connect(
-                get_postgres_conn_string(),
-                autocommit=True,
-                prepare_threshold=0,
-                row_factory=dict_row,
-            )
-            _checkpointer = PostgresSaver(conn=_checkpoint_connection)
-            _checkpointer.setup()
-
-        _agent_graph = build_agent_graph(checkpointer=_checkpointer)
-        _streaming_agent_graph = build_agent_graph(
-            streaming=True,
-            checkpointer=_checkpointer,
-        )
 
 
 def get_thread_config(thread_id: str) -> RunnableConfig:
@@ -223,42 +165,69 @@ def get_final_response_text(messages: list[AnyMessage]) -> str:
     return ""
 
 
-def invoke_agent(message: str, thread_id: str) -> str:
-    _ensure_graphs()
-    result = _agent_graph.invoke(
-        {"messages": [HumanMessage(content=message)]},
-        config=get_thread_config(thread_id),
-    )
-    return get_final_response_text(result["messages"])
 
 
-def stream_agent_response(message: str, thread_id: str) -> Iterator[str]:
-    _ensure_graphs()
-    for chunk, metadata in _streaming_agent_graph.stream(
-        {"messages": [HumanMessage(content=message)]},
-        config=get_thread_config(thread_id),
-        stream_mode="messages",
-    ):
-        if metadata.get("langgraph_node") != "llm_call":
-            continue
-        if not isinstance(chunk, AIMessageChunk):
-            continue
+class AgentRuntime:
+    def __init__(self, checkpointer: AsyncPostgresSaver) -> None:
+        self.checkpointer = checkpointer
+        self.graph = build_agent_graph(checkpointer=checkpointer)
+        self.streaming_graph = build_agent_graph(
+            streaming=True,
+            checkpointer=checkpointer,
+        )
+        self._thread_locks: dict[str, asyncio.Lock] = {}
+        self._thread_locks_guard = asyncio.Lock()
 
-        text = _message_to_text(chunk)
-        if text:
-            yield text
+    async def _get_thread_lock(self, thread_id: str) -> asyncio.Lock:
+        async with self._thread_locks_guard:
+            lock = self._thread_locks.get(thread_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._thread_locks[thread_id] = lock
+            return lock
+
+    async def invoke_agent(self, message: str, thread_id: str) -> str:
+        lock = await self._get_thread_lock(thread_id)
+        async with lock:
+            result = await self.graph.ainvoke(
+                {"messages": [HumanMessage(content=message)]},
+                config=get_thread_config(thread_id),
+            )
+        return get_final_response_text(result["messages"])
+
+    async def stream_agent_response(
+        self,
+        message: str,
+        thread_id: str,
+    ) -> AsyncIterator[str]:
+        lock = await self._get_thread_lock(thread_id)
+        async with lock:
+            async for chunk, metadata in self.streaming_graph.astream(
+                {"messages": [HumanMessage(content=message)]},
+                config=get_thread_config(thread_id),
+                stream_mode="messages",
+            ):
+                if metadata.get("langgraph_node") != "llm_call":
+                    continue
+                if not isinstance(chunk, AIMessageChunk):
+                    continue
+
+                text = _message_to_text(chunk)
+                if text:
+                    yield text
+
+    async def close(self) -> None:
+        self._thread_locks.clear()
+        await close_agent_checkpointer()
 
 
-async def close_agent_resources() -> None:
-    global _agent_graph
-    global _streaming_agent_graph
-    global _checkpointer
-    global _checkpoint_connection
+async def create_agent_runtime() -> AgentRuntime:
+    checkpointer = await init_agent_checkpointer()
+    return AgentRuntime(checkpointer=checkpointer)
 
-    if _checkpoint_connection is not None:
-        _checkpoint_connection.close()
 
-    _agent_graph = None
-    _streaming_agent_graph = None
-    _checkpointer = None
-    _checkpoint_connection = None
+def get_agent_runtime(request: Request) -> AgentRuntime:
+    runtime = getattr(request.app.state, "agent_runtime", None)
+    if runtime is None:
+        raise RuntimeError("Agent runtime is not initialized.")
+    return runtime

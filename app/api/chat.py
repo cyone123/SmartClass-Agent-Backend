@@ -1,10 +1,9 @@
 import json
-from uuid import uuid4
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from app.core.agent import stream_agent_response
+from app.core.agent import AgentRuntime, get_agent_runtime
 from app.schemas.chat import ChatRequest
 
 router = APIRouter()
@@ -20,14 +19,20 @@ def format_sse_event(data: str, *, event: str | None = None) -> str:
 
 
 @router.post("/chat/stream")
-async def chat(message: ChatRequest):
-    thread_id = message.thread_id or uuid4().hex
+async def chat(
+    message: ChatRequest,
+    agent_runtime: AgentRuntime = Depends(get_agent_runtime),
+):
+    thread_id = message.thread_id
 
-    def event_stream():
+    async def event_stream():
         metadata = json.dumps({"thread_id": thread_id}, ensure_ascii=False)
         yield format_sse_event(metadata, event="metadata")
 
-        for data in stream_agent_response(message.message, thread_id):
+        async for data in agent_runtime.stream_agent_response(
+            message.message,
+            thread_id,
+        ):
             yield format_sse_event(data, event="message")
 
         yield format_sse_event("[DONE]", event="done")

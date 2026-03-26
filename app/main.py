@@ -2,16 +2,35 @@ import asyncio
 import sys
 
 from fastapi import FastAPI
+from fastapi.concurrency import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.chat import router as chat_router
 from app.api.file import router as file_router
-from app.core.agent import close_agent_resources
+from app.api.plan import router as plan_router
+from app.api.session import router as session_router
+from app.core.agent import create_agent_runtime
+from app.dependencies.db import close_db_resources, init_db
 
 if sys.platform.startswith("win") and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    agent_runtime = None
+    try:
+        await init_db()
+        agent_runtime = await create_agent_runtime()
+        app.state.agent_runtime = agent_runtime
+        yield
+    finally:
+        if agent_runtime is not None:
+            await agent_runtime.close()
+        await close_db_resources()
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,8 +42,5 @@ app.add_middleware(
 
 app.include_router(chat_router, prefix="/api")
 app.include_router(file_router, prefix="/api")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    await close_agent_resources()
+app.include_router(plan_router, prefix="/api")
+app.include_router(session_router, prefix="/api")
