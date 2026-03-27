@@ -28,7 +28,7 @@ load_dotenv()
 
 SYSTEM_PROMPT = (
     "You are a helpful assistant. Continue the conversation based on the stored "
-    "session context and use available tools when arithmetic is needed."
+    "session context and use available tools when needed."
 )
 CHECKPOINT_NAMESPACE = "chat"
 
