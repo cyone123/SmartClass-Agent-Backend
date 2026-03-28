@@ -5,14 +5,13 @@ from langchain_core.messages import BaseMessage
 
 
 class TeachingMetadata(TypedDict):
+    """教学要素"""
     subject: str | None                     # 学科，如"数学"
     grade: str | None                           # 年级，如"初二"
     topic: str | None                           # 课题名称，如"勾股定理"
-    teaching_objectives: List[str] | None       # 教学目标（三维目标）
     core_points: List[str] | None               # 核心知识点
     key_points: List[str] | None                # 重点
     difficult_points: List[str] | None          # 难点
-    special_requirements: str | None   = None # 特殊要求
     is_complete: bool
 
 class SubAgentResult(TypedDict):
