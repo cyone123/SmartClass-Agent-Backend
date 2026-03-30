@@ -10,6 +10,7 @@ from app.api.file import router as file_router
 from app.api.plan import router as plan_router
 from app.api.session import router as session_router
 from app.core.agent import create_agent_runtime
+from app.core.rag import create_rag_runtime
 from app.dependencies.db import close_db_resources, init_db
 
 if sys.platform.startswith("win") and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
@@ -19,14 +20,19 @@ if sys.platform.startswith("win") and hasattr(asyncio, "WindowsSelectorEventLoop
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     agent_runtime = None
+    rag_runtime = None
     try:
         await init_db()
-        agent_runtime = await create_agent_runtime()
+        rag_runtime = await create_rag_runtime()
+        app.state.rag_runtime = rag_runtime
+        agent_runtime = await create_agent_runtime(rag_runtime)
         app.state.agent_runtime = agent_runtime
         yield
     finally:
         if agent_runtime is not None:
             await agent_runtime.close()
+        if rag_runtime is not None:
+            await rag_runtime.close()
         await close_db_resources()
 
 

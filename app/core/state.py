@@ -28,7 +28,7 @@ class TeachingAssistantState(TypedDict):
     # ── 教学元数据 ──
     teaching_metadata: Optional[TeachingMetadata]
     # ── RAG ──
-    rag_results: List[Dict[str, Any]]           # 原始检索结果
+    # rag_results: List[Dict[str, Any]]           # 原始检索结果
     rag_context: str                            # 整理后供LLM使用的上下文
     # ── 教学设计 ──
     teaching_design_plan: str                   # 完整教学设计方案（供子Agent使用）
