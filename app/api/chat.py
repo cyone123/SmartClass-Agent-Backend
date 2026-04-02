@@ -2,9 +2,12 @@ import json
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.agent import AgentRuntime, get_agent_runtime
+from app.dependencies.db import get_db
 from app.schemas.chat import ChatRequest
+from app.services import session_service
 
 router = APIRouter()
 
@@ -22,8 +25,14 @@ def format_sse_event(data: str, *, event: str | None = None) -> str:
 async def chat(
     message: ChatRequest,
     agent_runtime: AgentRuntime = Depends(get_agent_runtime),
+    db: AsyncSession = Depends(get_db),
 ):
     thread_id = message.thread_id
+    plan_id = None
+    if thread_id:
+        session = await session_service.get_session_by_thread_id(db, thread_id)
+        if session is not None:
+            plan_id = session.plan_id
 
     async def event_stream():
         metadata = json.dumps({"thread_id": thread_id}, ensure_ascii=False)
@@ -32,6 +41,7 @@ async def chat(
         async for data in agent_runtime.stream_agent_response(
             message.message,
             thread_id,
+            plan_id=plan_id,
         ):
             yield format_sse_event(data, event="message")
 

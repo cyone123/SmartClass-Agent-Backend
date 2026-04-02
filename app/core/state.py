@@ -1,12 +1,14 @@
 from __future__ import annotations
-from typing import TypedDict, Annotated, Optional, List, Dict, Any, Literal
-from langgraph.graph.message import add_messages
+
+from typing import Annotated, List, Literal, Optional, TypedDict
+
 from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
 
 
 class TeachingMetadata(TypedDict):
     """教学要素"""
-    subject: str | None                     # 学科，如"数学"
+    subject: str | None                         # 学科，如"数学"
     grade: str | None                           # 年级，如"初二"
     topic: str | None                           # 课题名称，如"勾股定理"
     core_points: List[str] | None               # 核心知识点
@@ -24,12 +26,11 @@ class TeachingAssistantState(TypedDict):
     # ── 消息历史（自动累加）──
     messages: Annotated[List[BaseMessage], add_messages]
     # ── 意图识别 & 完整性 ──
-    intent: str                      # 意图识别结果
+    intent: str                                 # 意图识别结果
     # ── 教学元数据 ──
     teaching_metadata: Optional[TeachingMetadata]
     # ── RAG ──
-    # rag_results: List[Dict[str, Any]]           # 原始检索结果
-    rag_context: str                            # 整理后供LLM使用的上下文
+    rag_context: str                            # RAG整理后供LLM使用的上下文
     # ── 教学设计 ──
     teaching_design_plan: str                   # 完整教学设计方案（供子Agent使用）
     # ── 子 Agent 产出 ──

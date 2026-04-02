@@ -84,14 +84,36 @@ class AgentRuntime:
         return bool(interrupts) and INTERRUPT_FOR_USERINPUT_NODE in next_nodes
 
     async def _get_graph_input(self, message: str, thread_id: str):
+        return await self._get_graph_input_with_plan(message, thread_id, plan_id=None)
+
+    async def _get_graph_input_with_plan(
+        self,
+        message: str,
+        thread_id: str,
+        *,
+        plan_id: int | None,
+    ):
         if await self._should_resume_thread(thread_id):
             return Command(resume=message)
-        return {"messages": [HumanMessage(content=message)]}
+        graph_input = {"messages": [HumanMessage(content=message)]}
+        if plan_id is not None:
+            graph_input["plan_id"] = plan_id
+        return graph_input
 
-    async def invoke_agent(self, message: str, thread_id: str) -> str:
+    async def invoke_agent(
+        self,
+        message: str,
+        thread_id: str,
+        *,
+        plan_id: int | None = None,
+    ) -> str:
         lock = await self._get_thread_lock(thread_id)
         async with lock:
-            graph_input = await self._get_graph_input(message, thread_id)
+            graph_input = await self._get_graph_input_with_plan(
+                message,
+                thread_id,
+                plan_id=plan_id,
+            )
             result = await self.graph.ainvoke(
                 graph_input,
                 config=get_thread_config(thread_id),
@@ -102,10 +124,16 @@ class AgentRuntime:
         self,
         message: str,
         thread_id: str,
+        *,
+        plan_id: int | None = None,
     ) -> AsyncIterator[str]:
         lock = await self._get_thread_lock(thread_id)
         async with lock:
-            graph_input = await self._get_graph_input(message, thread_id)
+            graph_input = await self._get_graph_input_with_plan(
+                message,
+                thread_id,
+                plan_id=plan_id,
+            )
             async for chunk, metadata in self.streaming_graph.astream(
                 graph_input,
                 config=get_thread_config(thread_id),

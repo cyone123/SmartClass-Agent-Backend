@@ -135,14 +135,14 @@ def _message_to_text(message: AIMessage | HumanMessage) -> str:
 
 def _build_rag_query(state: TeachingAssistantState) -> str:
     metadata = state.get("teaching_metadata") or {}
-    query_messages = [
+    human_messages = [
         _message_to_text(msg).strip()
-        for msg in state.get("messages", [])[-2:-1]
-        if isinstance(msg, (HumanMessage, AIMessage))
+        for msg in state.get("messages", [])
+        if isinstance(msg, HumanMessage)
     ]
     query_parts = [
         f"教学元数据: {json.dumps(metadata, ensure_ascii=False)}",
-        f"用户问题: {' '.join(message for message in query_messages if message)}",
+        f"用户问题: {' '.join(message for message in human_messages if message)}",
     ]
     return "\n".join(part for part in query_parts if part.strip())
 
@@ -151,7 +151,7 @@ def teaching_design_planner(state: TeachingAssistantState):
     system_prompt = (
         "你是一个帮助老师备课生成教学计划的多智能体中的总体生成规划节点。"
         "请根据用户提供的信息要求、教学元数据和检索到的参考资料，"
-        "输出一份完整且可执行的教学设计计划，以供后续生成PPT和教案的节点参考。"
+        "输出一份完整且可执行的教学设计计划，以便后续生成 PPT 和教案节点参考。"
         f"教学元数据：{state.get('teaching_metadata')}\n"
         f"RAG 上下文：{state.get('rag_context', '')}"
     )
@@ -171,11 +171,20 @@ def build_agent_graph(
 ):
     async def rag_retrieval_node(state: TeachingAssistantState):
         query = _build_rag_query(state)
-        result = await rag_runtime.retrieval(query)
+        result = await rag_runtime.retrieval(
+            query,
+            plan_id=state.get("plan_id"),
+        )
         print(f"【RAG 检索节点】原始检索结果数量：{len(result)}")
-        print(f"【RAG 检索节点】原始检索结果：{str(result)}")
-        rag_context = "\n\n".join(document.page_content for document in result)
-        return {"rag_context": rag_context}
+        rag_results = [
+            {
+                "page_content": document.page_content,
+                "metadata": document.metadata,
+            }
+            for document in result
+        ]
+        rag_context = "\n\n".join(document["page_content"] for document in rag_results)
+        return {"rag_results": rag_results, "rag_context": rag_context}
 
     agent_builder = StateGraph(TeachingAssistantState)
     agent_builder.add_node("intent_router_node", intent_router_node)

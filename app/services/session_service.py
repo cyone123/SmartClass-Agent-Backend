@@ -21,6 +21,12 @@ async def create_session(db, name, plan_id):
     await db.refresh(new_session)
     return new_session
 
+
+async def get_session_by_thread_id(db, thread_id):
+    query = select(Session).where(Session.thread_id == thread_id)
+    result = await db.execute(query)
+    return result.scalar_one_or_none()
+
 async def get_message_histry(thread_id, agent_runtime):
     config = { "configurable": {
         "thread_id": thread_id
@@ -49,4 +55,3 @@ async def update_session_by_id(db, session):
     await db.execute(stmt)
     await db.commit()
     return
-

@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
@@ -31,3 +32,24 @@ def get_db_uri() -> str:
     if sslmode:
         conn_string = f"{conn_string}?sslmode={sslmode}"
     return conn_string
+
+
+def get_file_storage_root() -> Path:
+    configured = get_env("FILE_STORAGE_ROOT")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return Path(__file__).resolve().parents[1] / "storage"
+
+
+def get_file_upload_max_size_bytes() -> int:
+    value = get_env("FILE_UPLOAD_MAX_SIZE_BYTES", "20971520") or "20971520"
+    return int(value)
+
+
+def get_allowed_upload_extensions() -> set[str]:
+    raw = get_env("FILE_ALLOWED_EXTENSIONS", ".pdf") or ".pdf"
+    return {
+        extension.strip().lower()
+        for extension in raw.split(",")
+        if extension.strip()
+    }
