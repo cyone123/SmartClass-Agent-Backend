@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
+    from app.models.file import AttachmentFile
     from app.models.file import KnowledgeFile
     from app.models.session import Session
 
@@ -25,4 +26,9 @@ class Plan(Base):
         "KnowledgeFile",
         back_populates="plan",
         order_by="KnowledgeFile.id",
+    )
+    attachments: Mapped[list[AttachmentFile]] = relationship(
+        "AttachmentFile",
+        back_populates="plan",
+        order_by="AttachmentFile.id",
     )

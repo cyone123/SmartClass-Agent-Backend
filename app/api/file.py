@@ -8,7 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.file_ingestion import FileIngestionRuntime, get_file_ingestion_runtime
 from app.core.rag import RagRuntime, get_rag_runtime
 from app.dependencies.db import get_db
-from app.schemas.file import KnowledgeFileListResponse, KnowledgeFileResponse
+from app.schemas.file import (
+    AttachmentFileResponse,
+    KnowledgeFileListResponse,
+    KnowledgeFileResponse,
+)
 from app.schemas.response import success_response
 from app.services import file_service
 
@@ -41,6 +45,25 @@ async def upload_file(
     if file_record.status == file_service.FILE_STATUS_UPLOADED:
         await ingestion_runtime.enqueue(file_record.id)
     return success_response(data=file_record, response_model=KnowledgeFileResponse)
+
+
+@router.post("/file/attachment/upload", response_model=AttachmentFileResponse)
+async def upload_attachment_file(
+    plan_id: int,
+    thread_id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> AttachmentFileResponse:
+    attachment_record = await file_service.create_attachment_from_upload(
+        db,
+        plan_id=plan_id,
+        thread_id=thread_id,
+        upload_file=file,
+    )
+    return success_response(
+        data=attachment_record,
+        response_model=AttachmentFileResponse,
+    )
 
 
 @router.post("/file/{file_id}/retry", response_model=KnowledgeFileResponse)

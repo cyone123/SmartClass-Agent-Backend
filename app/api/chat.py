@@ -1,13 +1,13 @@
 import json
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.agent import AgentRuntime, get_agent_runtime
 from app.dependencies.db import get_db
 from app.schemas.chat import ChatRequest
-from app.services import session_service
+from app.services import file_service, session_service
 
 router = APIRouter()
 
@@ -21,6 +21,11 @@ def format_sse_event(data: str, *, event: str | None = None) -> str:
     return payload + "\n"
 
 
+async def parse_attachment_files(file_paths: list[str]) -> str:
+    _ = file_paths
+    return ""
+
+
 @router.post("/chat/stream")
 async def chat(
     message: ChatRequest,
@@ -28,11 +33,33 @@ async def chat(
     db: AsyncSession = Depends(get_db),
 ):
     thread_id = message.thread_id
+    attachment_ids = message.attachment_ids or []
+    if attachment_ids and not thread_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="thread_id is required when attachment_ids are provided.",
+        )
+
     plan_id = None
     if thread_id:
         session = await session_service.get_session_by_thread_id(db, thread_id)
         if session is not None:
             plan_id = session.plan_id
+
+    attachment_text = ""
+    if attachment_ids:
+        if plan_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Thread {thread_id} not found.",
+            )
+        attachment_paths = await file_service.get_attachment_storage_paths_by_ids(
+            db,
+            plan_id=plan_id,
+            thread_id=thread_id,
+            attachment_ids=attachment_ids,
+        )
+        attachment_text = await parse_attachment_files(attachment_paths)
 
     async def event_stream():
         metadata = json.dumps({"thread_id": thread_id}, ensure_ascii=False)
@@ -42,6 +69,7 @@ async def chat(
             message.message,
             thread_id,
             plan_id=plan_id,
+            attachment_text=attachment_text or None,
         ):
             yield format_sse_event(data, event="message")
 
@@ -54,6 +82,6 @@ async def chat(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
-            "X-Thread-ID": thread_id,
+            "X-Thread-ID": thread_id or "",
         },
     )

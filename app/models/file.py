@@ -49,3 +49,36 @@ class KnowledgeFile(Base):
     )
 
     plan: Mapped[Plan] = relationship("Plan", back_populates="files")
+
+
+class AttachmentFile(Base):
+    __tablename__ = "attachment_files"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("teaching_plans.id"),
+        nullable=False,
+        index=True,
+    )
+    thread_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    original_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    stored_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    extension: Mapped[str] = mapped_column(String(20), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    plan: Mapped[Plan] = relationship("Plan", back_populates="attachments")

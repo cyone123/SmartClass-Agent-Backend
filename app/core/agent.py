@@ -4,12 +4,12 @@ import asyncio
 from collections.abc import AsyncIterator
 
 from fastapi import Request
-from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
 
-from app.core.graph import build_agent_graph
+from app.core.graph import build_agent_graph, build_input_messages
 from app.core.rag import RagRuntime
 from app.dependencies.db import close_agent_checkpointer, init_agent_checkpointer
 
@@ -92,33 +92,46 @@ class AgentRuntime:
         thread_id: str,
         *,
         plan_id: int | None,
+        attachment_text: str | None = None,
     ):
         if await self._should_resume_thread(thread_id):
+            if attachment_text:
+                return Command(
+                    resume={
+                        "message": message,
+                        "attachment_text": attachment_text,
+                    }
+                )
             return Command(resume=message)
-        graph_input = {"messages": [HumanMessage(content=message)]}
+
+        graph_input = {
+            "messages": build_input_messages(message, attachment_text),
+        }
         if plan_id is not None:
             graph_input["plan_id"] = plan_id
         return graph_input
 
-    async def invoke_agent(
-        self,
-        message: str,
-        thread_id: str,
-        *,
-        plan_id: int | None = None,
-    ) -> str:
-        lock = await self._get_thread_lock(thread_id)
-        async with lock:
-            graph_input = await self._get_graph_input_with_plan(
-                message,
-                thread_id,
-                plan_id=plan_id,
-            )
-            result = await self.graph.ainvoke(
-                graph_input,
-                config=get_thread_config(thread_id),
-            )
-        return get_final_response_text(result["messages"])
+    # async def invoke_agent(
+    #     self,
+    #     message: str,
+    #     thread_id: str,
+    #     *,
+    #     plan_id: int | None = None,
+    #     attachment_text: str | None = None,
+    # ) -> str:
+    #     lock = await self._get_thread_lock(thread_id)
+    #     async with lock:
+    #         graph_input = await self._get_graph_input_with_plan(
+    #             message,
+    #             thread_id,
+    #             plan_id=plan_id,
+    #             attachment_text=attachment_text,
+    #         )
+    #         result = await self.graph.ainvoke(
+    #             graph_input,
+    #             config=get_thread_config(thread_id),
+    #         )
+    #     return get_final_response_text(result["messages"])
 
     async def stream_agent_response(
         self,
@@ -126,6 +139,7 @@ class AgentRuntime:
         thread_id: str,
         *,
         plan_id: int | None = None,
+        attachment_text: str | None = None,
     ) -> AsyncIterator[str]:
         lock = await self._get_thread_lock(thread_id)
         async with lock:
@@ -133,6 +147,7 @@ class AgentRuntime:
                 message,
                 thread_id,
                 plan_id=plan_id,
+                attachment_text=attachment_text,
             )
             async for chunk, metadata in self.streaming_graph.astream(
                 graph_input,

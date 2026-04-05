@@ -14,6 +14,8 @@ from app.core.llm import llm, structured_output_llm
 from app.core.rag import RagRuntime
 from app.core.state import TeachingAssistantState, TeachingMetadata
 
+ATTACHMENT_MESSAGE_PREFIX = "附件内容（供本轮对话参考）：\n"
+
 
 class IntentRoute(BaseModel):
     intent: Literal["normal_chat", "teaching_plan"] = Field(
@@ -34,6 +36,19 @@ metadata_extractor = structured_output_llm.with_structured_output(
 )
 
 
+def build_input_messages(
+    message: str,
+    attachment_text: str | None = None,
+) -> list[HumanMessage]:
+    messages: list[HumanMessage] = []
+    if attachment_text:
+        messages.append(
+            HumanMessage(content=f"{ATTACHMENT_MESSAGE_PREFIX}{attachment_text}")
+        )
+    messages.append(HumanMessage(content=message))
+    return messages
+
+
 def intent_router_node(state: TeachingAssistantState):
     decision = router.invoke(
         [
@@ -48,7 +63,7 @@ def intent_router_node(state: TeachingAssistantState):
             state["messages"][-1],
         ]
     )
-    print(f"【意图识别路由节点】路由结果：{decision.intent}")
+    print(f"[intent_router_node] intent={decision.intent}")
     return {"intent": decision.intent}
 
 
@@ -77,26 +92,26 @@ def metadata_structer_node(state: TeachingAssistantState):
     original_messages = state["messages"]
     start_time = time.perf_counter()
     print(
-        "【结构化元数据节点】开始抽取，"
-        f"original_messages={len(original_messages)}，"
+        "[metadata_structer_node] start "
+        f"original_messages={len(original_messages)}"
     )
     response = metadata_extractor.invoke(
         [SystemMessage(content=system_prompt)]
         + [msg for msg in original_messages if isinstance(msg, HumanMessage)]
     )
     duration_ms = (time.perf_counter() - start_time) * 1000
-    print(f"【结构化元数据节点】结构化调用耗时：{duration_ms:.2f}ms")
-    print(f"【结构化元数据节点】结构化元数据结果：{response}")
+    print(f"[metadata_structer_node] duration_ms={duration_ms:.2f}")
+    print(f"[metadata_structer_node] response={response}")
     return {"teaching_metadata": response}
 
 
 def metadata_completion_condition(state: TeachingAssistantState):
     metadata = state.get("teaching_metadata")
     if metadata and metadata.get("is_complete"):
-        print("【元数据完整性验证】验证结果：is_complete")
+        print("[metadata_completion_condition] is_complete=true")
         return "rag_retrieval_node"
 
-    print("【元数据完整性验证】验证结果：not_complete")
+    print("[metadata_completion_condition] is_complete=false")
     return "follow_up_questioner"
 
 
@@ -107,15 +122,22 @@ def follow_up_questioner(state: TeachingAssistantState):
         f"当前教学要素：{state.get('teaching_metadata')}"
     )
     response = llm.invoke([SystemMessage(content=system_prompt)])
-    print("【主动追问节点】发起一次主动追问")
+    print("[follow_up_questioner] ask follow-up question")
     return {"messages": [response]}
 
 
 def interrupt_for_userinput(state: TeachingAssistantState):
-    print("【中断节点】正在中断，等待用户输入")
+    print("[interrupt_for_userinput] waiting for user input")
     user_input = interrupt({"question": state["messages"][-1].content})
-    print("【中断节点】中断恢复")
-    return {"messages": [HumanMessage(content=user_input)]}
+    print("[interrupt_for_userinput] resumed")
+    if isinstance(user_input, dict):
+        return {
+            "messages": build_input_messages(
+                user_input.get("message", ""),
+                user_input.get("attachment_text"),
+            )
+        }
+    return {"messages": build_input_messages(str(user_input))}
 
 
 def _message_to_text(message: AIMessage | HumanMessage) -> str:
@@ -156,7 +178,7 @@ def teaching_design_planner(state: TeachingAssistantState):
         f"RAG 上下文：{state.get('rag_context', '')}"
     )
     response = llm.invoke([SystemMessage(content=system_prompt)] + state["messages"])
-    print("【总体计划节点】正在输出总体计划")
+    print("[teaching_design_planner] generated teaching design plan")
     return {
         "teaching_design_plan": _message_to_text(response).strip(),
         "messages": [response],
@@ -175,7 +197,7 @@ def build_agent_graph(
             query,
             plan_id=state.get("plan_id"),
         )
-        print(f"【RAG 检索节点】原始检索结果数量：{len(result)}")
+        print(f"[rag_retrieval_node] raw_result_count={len(result)}")
         rag_results = [
             {
                 "page_content": document.page_content,

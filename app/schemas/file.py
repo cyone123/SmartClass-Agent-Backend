@@ -36,3 +36,24 @@ class KnowledgeFileResponse(BaseResponse[KnowledgeFile]):
 
 class KnowledgeFileListResponse(BaseResponse[list[KnowledgeFile]]):
     pass
+
+
+class AttachmentFile(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    plan_id: int
+    thread_id: str
+    original_name: str
+    stored_name: str
+    extension: str
+    mime_type: str
+    size_bytes: int
+    sha256: str
+    storage_path: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class AttachmentFileResponse(BaseResponse[AttachmentFile]):
+    pass
