@@ -11,9 +11,11 @@ class TeachingMetadata(TypedDict):
     subject: str | None                         # 学科，如"数学"
     grade: str | None                           # 年级，如"初二"
     topic: str | None                           # 课题名称，如"勾股定理"
+    course_duration: str                        # 教学时长
     core_points: List[str] | None               # 核心知识点
     key_points: List[str] | None                # 重点
     difficult_points: List[str] | None          # 难点
+    teaching_objectives: str                    # 教学目标
     is_complete: bool
 
 class SubAgentResult(TypedDict):

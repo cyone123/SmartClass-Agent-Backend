@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.core.agent import AgentRuntime
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,9 +45,9 @@ def _guess_mime_type(filename: str, fallback: str | None) -> str:
 
 
 def _build_storage_path(plan_id: int, file_id: int, original_name: str) -> tuple[str, Path]:
-    safe_name = _sanitize_filename(original_name)
-    stored_name = f"{file_id}_{safe_name}"
-    storage_path = get_file_storage_root() / "plan_files" / str(plan_id) / stored_name
+    # safe_name = _sanitize_filename(original_name)
+    stored_name = original_name #f"{file_id}.{safe_name}"
+    storage_path = get_file_storage_root() / "plan_files" / plan_id / stored_name
     return stored_name, storage_path
 
 
@@ -56,16 +57,16 @@ def _build_attachment_storage_path(
     attachment_id: int,
     original_name: str,
 ) -> tuple[str, Path]:
-    safe_name = _sanitize_filename(original_name)
-    stored_name = f"{attachment_id}_{safe_name}"
+    # safe_name = _sanitize_filename(original_name)
+    stored_name = original_name #f"{attachment_id}.{safe_name}"
     storage_path = (
-        get_file_storage_root() / "attachments" / str(plan_id) / thread_id / stored_name
+        get_file_storage_root() / "attachments" / thread_id / stored_name
     )
     return stored_name, storage_path
 
 
 async def _read_and_validate_upload_file(upload_file: UploadFile) -> tuple[str, str, bytes, int, str, str]:
-    original_name = upload_file.filename or "file.pdf"
+    original_name = upload_file.filename
     extension = Path(original_name).suffix.lower()
     allowed_extensions = get_allowed_upload_extensions()
     if extension not in allowed_extensions:
@@ -345,6 +346,10 @@ async def get_attachment_storage_paths_by_ids(
             )
         storage_paths.append(attachment.storage_path)
     return storage_paths
+
+
+async def parse_attachment_files(message: str, file_paths: list[str], agent_runtime: AgentRuntime) -> str:
+    return await agent_runtime.analyze_attachments(message, file_paths)
 
 
 async def mark_file_indexing(db: AsyncSession, file_record: KnowledgeFile) -> KnowledgeFile:

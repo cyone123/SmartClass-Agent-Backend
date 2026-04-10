@@ -16,14 +16,10 @@ def format_sse_event(data: str, *, event: str | None = None) -> str:
     payload = ""
     if event:
         payload += f"event: {event}\n"
-    for line in data.splitlines() or [data]:
+    normalized_data = data.replace("\r\n", "\n").replace("\r", "\n")
+    for line in normalized_data.split("\n") or [normalized_data]:
         payload += f"data: {line}\n"
     return payload + "\n"
-
-
-async def parse_attachment_files(file_paths: list[str]) -> str:
-    _ = file_paths
-    return ""
 
 
 @router.post("/chat/stream")
@@ -59,7 +55,7 @@ async def chat(
             thread_id=thread_id,
             attachment_ids=attachment_ids,
         )
-        attachment_text = await parse_attachment_files(attachment_paths)
+        attachment_text = await file_service.parse_attachment_files(message.message, attachment_paths, agent_runtime)
 
     async def event_stream():
         metadata = json.dumps({"thread_id": thread_id}, ensure_ascii=False)

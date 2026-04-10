@@ -2,7 +2,7 @@ from re import S
 
 from sqlalchemy import delete, select, update
 from uuid_utils import uuid4
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage, SystemMessage
 from app.models.session import Session
 
 
@@ -39,7 +39,7 @@ async def get_message_histry(thread_id, agent_runtime):
         return messages_res
     
     for msg in messages:
-        if isinstance(msg, ToolMessage): continue
+        if isinstance(msg, (ToolMessage, SystemMessage)): continue
         messages_res.append({"role": "teacher" if isinstance(msg, HumanMessage) else "ai", "type": "text", "content": msg.content})
     return messages_res
 

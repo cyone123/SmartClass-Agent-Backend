@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import asyncio
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from fastapi import Request
 from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage
@@ -11,7 +13,20 @@ from langgraph.types import Command
 
 from app.core.graph import build_agent_graph, build_input_messages
 from app.core.rag import RagRuntime
+from app.core.skills import SkillRegistry, create_skill_registry, SkillToolset
+from app.config import get_backend_root
 from app.dependencies.db import close_agent_checkpointer, init_agent_checkpointer
+from langchain.agents import create_agent
+from langchain.agents.middleware import (
+    FilesystemFileSearchMiddleware,
+    ToolRetryMiddleware,
+    ShellToolMiddleware,
+    HostExecutionPolicy,
+)
+from langchain.agents.middleware import ModelRequest, ModelResponse, AgentMiddleware
+from langchain.messages import SystemMessage
+from app.core.llm import get_model
+from typing import Callable
 
 INTERRUPT_FOR_USERINPUT_NODE = "interrupt_for_userinput"
 
@@ -35,8 +50,10 @@ def _message_to_text(message: AnyMessage) -> str:
         for item in content:
             if isinstance(item, str):
                 text_parts.append(item)
-            elif isinstance(item, dict) and item.get("type") == "text":
-                text_parts.append(item.get("text", ""))
+            elif isinstance(item, dict):
+                item_text = item.get("text")
+                if isinstance(item_text, str):
+                    text_parts.append(item_text)
         return "".join(text_parts)
 
     return str(content)
@@ -49,25 +66,141 @@ def get_final_response_text(messages: list[AnyMessage]) -> str:
     return ""
 
 
+class SkillPromptMiddleware(AgentMiddleware):
+    """Inject skill metadata into the agent system prompt."""
+
+    def __init__(self, registry: SkillRegistry) -> None:
+        skill_lines = [
+            f"- **{skill.name}**: {skill.description}"
+            for skill in registry.list_metadata()
+        ]
+        self.skills_prompt = "\n".join(skill_lines)
+
+    def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        skills_addendum = (
+            f"\n\n## Available Skills\n\n{self.skills_prompt}\n\n"
+            "Only the metadata above is preloaded. When a request matches a skill, "
+            "use `load_skill` to read its instructions. Then use `read_skill_resource` "
+            "or `run_skill_script` only when the loaded skill tells you to. When "
+            "calling `run_skill_script`, pass `script_args` as a string array."
+        )
+
+        if request.system_message is None:
+            new_system_message = SystemMessage(content=skills_addendum.strip())
+        else:
+            new_content = list(request.system_message.content_blocks) + [
+                {"type": "text", "text": skills_addendum}
+            ]
+            new_system_message = SystemMessage(content=new_content)
+        modified_request = request.override(system_message=new_system_message)
+        return handler(modified_request)
+
+
 class AgentRuntime:
     def __init__(
         self,
         checkpointer: AsyncPostgresSaver,
         rag_runtime: RagRuntime,
+        skill_registry: SkillRegistry,
     ) -> None:
+        self.skill_registry = skill_registry
+        self.backend_root = get_backend_root()
+        self.skill_toolset = SkillToolset(skill_registry)
+        if os.name == "nt":
+            shell_command = ["cmd.exe", "/Q", "/K"]
+        else:
+            shell_command = ["/bin/bash"]
+        self.agent_runnable = create_agent(
+            model=get_model(streaming=True),
+            tools=self.skill_toolset.tools,
+            system_prompt=(
+                "You are an agent that analyze uploaded "
+                "materials or generate courseware. Use the available skills when the task "
+                "matches their descriptions. Prefer progressive disclosure: load the "
+                "skill instructions first, then read bundled resources or run skill scripts when needed. "
+                # "Do NOT use shell for docx/pdf/xlsx analysis. "
+                "For document analysis, use 'run_skill_script' instead. "
+            ),
+            middleware=[
+                FilesystemFileSearchMiddleware(
+                    root_path=str(self.backend_root),
+                    use_ripgrep=True,
+                ),
+                ShellToolMiddleware(
+                    workspace_root=str(self.backend_root),
+                    execution_policy=HostExecutionPolicy(),
+                    shell_command=shell_command,
+                    tool_description=(
+                        "Shell for system-command tasks only. "
+                        "Use cmd because you are working in windows now. "
+                        "Use this tool only when a task explicitly requires OS/CLI execution, "
+                        "such as npm, ffmpeg, process diagnostics, or filesystem commands "
+                        "that cannot be completed through dedicated tools. "
+                    ),
+                ),
+                SkillPromptMiddleware(skill_registry),
+                ToolRetryMiddleware(
+                    max_retries=3,
+                    backoff_factor=0.0,
+                    initial_delay=1.0,
+                ),
+            ],
+        )
+
         self.checkpointer = checkpointer
         self.rag_runtime = rag_runtime
         self.graph = build_agent_graph(
             checkpointer=checkpointer,
             rag_runtime=rag_runtime,
+            agent_runnable=self.agent_runnable
         )
+
         self.streaming_graph = build_agent_graph(
             streaming=True,
             checkpointer=checkpointer,
             rag_runtime=rag_runtime,
+            agent_runnable=self.agent_runnable
         )
         self._thread_locks: dict[str, asyncio.Lock] = {}
         self._thread_locks_guard = asyncio.Lock()
+
+    async def analyze_attachments(self, message, file_paths: list[str]) -> str:
+        print("============正在分析附件信息=========")
+        user_prompt = (
+            "Analyze the uploaded attachment files accroding to user's request. "
+            f"Load the proper skills based on the file and follow it. "
+            "Use bundled scripts or resources when needed, then return a concise but "
+            "useful summary without any unnecessary content.\n\n"
+            f"user's message: {message}"
+            "Attachment file paths:\n"
+            + "\n".join(f"- {Path(file_path)}" for file_path in file_paths)
+        )
+        final_msg_content = ""
+        async for chunk in self.agent_runnable.astream(
+            {
+                "messages": [{"role": "user", "content": user_prompt}]
+            },
+            stream_mode="updates",
+            version="v2",
+        ):
+            if chunk["type"] == "updates":
+                for step, data in chunk["data"].items():
+                    if step == 'tools':
+                        print("======================ToolMessage========================")
+                        print(f"ToolMessage: {data['messages'][-1].content}. ToolName: {data['messages'][-1].name}")
+                    if step == 'model':
+                        if data['messages'][-1].content:
+                            print("======================AIMessage==========================")
+                            print(f'AIMessage: {data['messages'][-1].content}')
+                        if data['messages'][-1].tool_calls:
+                            print("======================AI_Tool_calls======================")
+                            print(f"Tool_calls: {data['messages'][-1].tool_calls}")
+                        final_msg_content = data['messages'][-1].content
+        return final_msg_content
 
     async def _get_thread_lock(self, thread_id: str) -> asyncio.Lock:
         async with self._thread_locks_guard:
@@ -93,6 +226,7 @@ class AgentRuntime:
         *,
         plan_id: int | None,
         attachment_text: str | None = None,
+        attachment_paths: list[str] | None = None
     ):
         if await self._should_resume_thread(thread_id):
             if attachment_text:
@@ -100,12 +234,13 @@ class AgentRuntime:
                     resume={
                         "message": message,
                         "attachment_text": attachment_text,
+                        "attachment_paths": attachment_paths
                     }
                 )
             return Command(resume=message)
 
         graph_input = {
-            "messages": build_input_messages(message, attachment_text),
+            "messages": build_input_messages(message, attachment_text, attachment_paths),
         }
         if plan_id is not None:
             graph_input["plan_id"] = plan_id
@@ -140,6 +275,7 @@ class AgentRuntime:
         *,
         plan_id: int | None = None,
         attachment_text: str | None = None,
+        attachment_paths: list[str] | None = None
     ) -> AsyncIterator[str]:
         lock = await self._get_thread_lock(thread_id)
         async with lock:
@@ -148,7 +284,9 @@ class AgentRuntime:
                 thread_id,
                 plan_id=plan_id,
                 attachment_text=attachment_text,
+                attachment_paths=attachment_paths
             )
+            received_text_chunk = False
             async for chunk, metadata in self.streaming_graph.astream(
                 graph_input,
                 config=get_thread_config(thread_id),
@@ -159,16 +297,31 @@ class AgentRuntime:
 
                 text = _message_to_text(chunk)
                 if text:
+                    received_text_chunk = True
                     yield text
+
+            if not received_text_chunk:
+                print(
+                    "[stream_agent_response] completed without any text chunks. "
+                    "This usually means nested model calls did not propagate streaming "
+                    "callbacks, or the upstream model endpoint did not return stream tokens."
+                )
 
     async def close(self) -> None:
         self._thread_locks.clear()
         await close_agent_checkpointer()
 
 
-async def create_agent_runtime(rag_runtime: RagRuntime) -> AgentRuntime:
+async def create_agent_runtime(
+    rag_runtime: RagRuntime,
+    skill_registry: SkillRegistry | None = None,
+) -> AgentRuntime:
     checkpointer = await init_agent_checkpointer()
-    return AgentRuntime(checkpointer=checkpointer, rag_runtime=rag_runtime)
+    return AgentRuntime(
+        checkpointer=checkpointer,
+        rag_runtime=rag_runtime,
+        skill_registry=skill_registry or create_skill_registry(),
+    )
 
 
 def get_agent_runtime(request: Request) -> AgentRuntime:

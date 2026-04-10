@@ -4,7 +4,8 @@ import json
 import time
 from typing import Literal
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -14,7 +15,7 @@ from app.core.llm import llm, structured_output_llm
 from app.core.rag import RagRuntime
 from app.core.state import TeachingAssistantState, TeachingMetadata
 
-ATTACHMENT_MESSAGE_PREFIX = "附件内容（供本轮对话参考）：\n"
+ATTACHMENT_MESSAGE_PREFIX = "用户上传的附件内容（供本轮对话参考）：\n"
 
 
 class IntentRoute(BaseModel):
@@ -39,11 +40,12 @@ metadata_extractor = structured_output_llm.with_structured_output(
 def build_input_messages(
     message: str,
     attachment_text: str | None = None,
-) -> list[HumanMessage]:
-    messages: list[HumanMessage] = []
+    attachment_paths: list[str] | None = None
+) -> list[BaseMessage]:
+    messages: list[BaseMessage] = []
     if attachment_text:
         messages.append(
-            HumanMessage(content=f"{ATTACHMENT_MESSAGE_PREFIX}{attachment_text}")
+            SystemMessage(content=f"{ATTACHMENT_MESSAGE_PREFIX}{attachment_text}， 附件的存储路径：{attachment_paths}")
         )
     messages.append(HumanMessage(content=message))
     return messages
@@ -54,16 +56,17 @@ def intent_router_node(state: TeachingAssistantState):
         [
             SystemMessage(
                 content=(
-                    "你是意图分析和路由节点。"
-                    "请判断用户输入是普通聊天还是备课/教学设计相关请求，"
-                    "并按 JSON 输出 intent。"
-                    "普通聊天输出 normal_chat，备课类输出 teaching_plan。"
+                    "You are an intent analysis and routing node." 
+                    "Please determine whether the user's input is general chat or related to lesson preparation/teaching design," 
+                    "and strictly output a JSON string, without any other content." 
+                    "For lesson preparation/teaching design related requests, output 'teaching_plan'. For other requests, output 'normal_chat'."
+                    'For exmaple, your output must be: {"intent": "normal_chat"} or {"intent": teaching_plan}. No newline escape character and any other things.'
                 )
             ),
             state["messages"][-1],
         ]
     )
-    print(f"[intent_router_node] intent={decision.intent}")
+    print(f"[intent_router_node] intent:{decision.intent}")
     return {"intent": decision.intent}
 
 
@@ -75,19 +78,22 @@ def route_decision(state: TeachingAssistantState):
     return "Error"
 
 
-def normal_chat_node(state: TeachingAssistantState):
-    response = llm.invoke(state["messages"])
+async def normal_chat_node(
+    state: TeachingAssistantState,
+):
+    response = await llm.ainvoke(state["messages"])
     return {"messages": [response]}
 
 
 def metadata_structer_node(state: TeachingAssistantState):
     current_metadata = state.get("teaching_metadata")
     system_prompt = (
-        "你是一个帮助老师备课的智能体中的结构化元数据节点。"
-        "请根据已有 JSON 和用户上下文，提取教学要素并输出 JSON。"
-        "用户没有提到的字段填 None。"
-        "当关键信息已完整可用于检索与教学设计时，is_complete 设为 true，否则为 false。"
-        f"当前已提取教学要素：{current_metadata}"
+        "You are a structured metadata node in an intelligent agent that helps teachers prepare lessons." 
+        "Please extract teaching elements based on the existing information, and output JSON."
+        "Ensure all information is obtained from the user, do not generate it by yourself. To ensure accuracy, if any element is incomplete, set is_completed to false, so that the next node will actively asks the user." 
+        "Fill fields that incomplete with None." 
+        "Set is_complete to true only when all elements are complete and can be used for retrieval and instructional design." 
+        f"Currently extracted teaching elements: {current_metadata}"
     )
     original_messages = state["messages"]
     start_time = time.perf_counter()
@@ -115,13 +121,15 @@ def metadata_completion_condition(state: TeachingAssistantState):
     return "follow_up_questioner"
 
 
-def follow_up_questioner(state: TeachingAssistantState):
+async def follow_up_questioner(
+    state: TeachingAssistantState,
+):
     system_prompt = (
         "你是一个帮助老师备课的智能体中的主动追问节点。"
-        "请根据当前缺失的教学要素，向用户提出一个最关键、最简洁的问题。"
+        "请根据当前缺失的教学要素，向用户提出问题来补全要素。"
         f"当前教学要素：{state.get('teaching_metadata')}"
     )
-    response = llm.invoke([SystemMessage(content=system_prompt)])
+    response = await llm.ainvoke([SystemMessage(content=system_prompt)])
     print("[follow_up_questioner] ask follow-up question")
     return {"messages": [response]}
 
@@ -169,7 +177,9 @@ def _build_rag_query(state: TeachingAssistantState) -> str:
     return "\n".join(part for part in query_parts if part.strip())
 
 
-def teaching_design_planner(state: TeachingAssistantState):
+async def teaching_design_planner(
+    state: TeachingAssistantState,
+):
     system_prompt = (
         "你是一个帮助老师备课生成教学计划的多智能体中的总体生成规划节点。"
         "请根据用户提供的信息要求、教学元数据和检索到的参考资料，"
@@ -177,8 +187,10 @@ def teaching_design_planner(state: TeachingAssistantState):
         f"教学元数据：{state.get('teaching_metadata')}\n"
         f"RAG 上下文：{state.get('rag_context', '')}"
     )
-    response = llm.invoke([SystemMessage(content=system_prompt)] + state["messages"])
-    print("[teaching_design_planner] generated teaching design plan")
+    response = await llm.ainvoke(
+        [SystemMessage(content=system_prompt)] + state["messages"],
+    )
+    print("===[teaching_design_planner] generated teaching design plan===")
     return {
         "teaching_design_plan": _message_to_text(response).strip(),
         "messages": [response],
@@ -190,7 +202,17 @@ def build_agent_graph(
     streaming: bool = False,
     checkpointer: AsyncPostgresSaver,
     rag_runtime: RagRuntime,
+    agent_runnable
 ):
+    async def ppt_generate_node(state: TeachingAssistantState):
+        pass
+
+    async def docx_generate_node(state: TeachingAssistantState):
+        pass
+
+    async def interactive_game_generate_node(state: TeachingAssistantState):
+        pass
+
     async def rag_retrieval_node(state: TeachingAssistantState):
         query = _build_rag_query(state)
         result = await rag_runtime.retrieval(

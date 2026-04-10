@@ -34,11 +34,22 @@ def get_db_uri() -> str:
     return conn_string
 
 
+def get_backend_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def get_skills_root() -> Path:
+    configured = get_env("SKILLS_ROOT")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return get_backend_root() / "skills"
+
+
 def get_file_storage_root() -> Path:
     configured = get_env("FILE_STORAGE_ROOT")
     if configured:
         return Path(configured).expanduser().resolve()
-    return Path(__file__).resolve().parents[1] / "storage"
+    return get_backend_root() / "storage"
 
 
 def get_file_upload_max_size_bytes() -> int:
@@ -47,7 +58,7 @@ def get_file_upload_max_size_bytes() -> int:
 
 
 def get_allowed_upload_extensions() -> set[str]:
-    raw = get_env("FILE_ALLOWED_EXTENSIONS", ".pdf") or ".pdf"
+    raw = get_env("FILE_ALLOWED_EXTENSIONS", ".docx,.pdf") or ".docx,.pdf"
     return {
         extension.strip().lower()
         for extension in raw.split(",")
