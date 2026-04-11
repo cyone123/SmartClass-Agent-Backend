@@ -78,6 +78,13 @@ def route_decision(state: TeachingAssistantState):
     return "Error"
 
 
+def _get_latest_human_message(state: TeachingAssistantState) -> HumanMessage | None:
+    for message in reversed(state.get("messages", [])):
+        if isinstance(message, HumanMessage):
+            return message
+    return None
+
+
 async def normal_chat_node(
     state: TeachingAssistantState,
 ):
@@ -90,9 +97,9 @@ def metadata_structer_node(state: TeachingAssistantState):
     system_prompt = (
         "You are a structured metadata node in an intelligent agent that helps teachers prepare lessons." 
         "Please extract teaching elements based on the existing information, and output JSON."
-        "Ensure all information is obtained from the user, do not generate it by yourself. To ensure accuracy, if any element is incomplete, set is_completed to false, so that the next node will actively asks the user." 
+        "Ensure all information is obtained from the user, do not generate it by yourself." 
         "Fill fields that incomplete with None." 
-        "Set is_complete to true only when all elements are complete and can be used for retrieval and instructional design." 
+        "Set is_complete to true when elements are complete and can be used for retrieval and instructional design. " 
         f"Currently extracted teaching elements: {current_metadata}"
     )
     original_messages = state["messages"]
@@ -193,9 +200,8 @@ async def teaching_design_planner(
     print("===[teaching_design_planner] generated teaching design plan===")
     return {
         "teaching_design_plan": _message_to_text(response).strip(),
-        "messages": [response],
+        "messages": [response]
     }
-
 
 def build_agent_graph(
     *,
@@ -204,15 +210,6 @@ def build_agent_graph(
     rag_runtime: RagRuntime,
     agent_runnable
 ):
-    async def ppt_generate_node(state: TeachingAssistantState):
-        pass
-
-    async def docx_generate_node(state: TeachingAssistantState):
-        pass
-
-    async def interactive_game_generate_node(state: TeachingAssistantState):
-        pass
-
     async def rag_retrieval_node(state: TeachingAssistantState):
         query = _build_rag_query(state)
         result = await rag_runtime.retrieval(
@@ -238,6 +235,7 @@ def build_agent_graph(
     agent_builder.add_node("interrupt_for_userinput", interrupt_for_userinput)
     agent_builder.add_node("rag_retrieval_node", rag_retrieval_node)
     agent_builder.add_node("teaching_design_planner", teaching_design_planner)
+    agent_builder.add_node("ppt_generate_node", agent_runnable)
 
     agent_builder.add_edge(START, "intent_router_node")
     agent_builder.add_conditional_edges(
@@ -261,5 +259,7 @@ def build_agent_graph(
     agent_builder.add_edge("interrupt_for_userinput", "metadata_structer_node")
     agent_builder.add_edge("rag_retrieval_node", "teaching_design_planner")
     agent_builder.add_edge("teaching_design_planner", END)
+    # agent_builder.add_edge("teaching_design_planner", "ppt_generate_node")
+    # agent_builder.add_edge("ppt_generate_node", END)
 
     return agent_builder.compile(checkpointer=checkpointer)

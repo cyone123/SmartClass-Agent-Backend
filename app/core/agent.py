@@ -4,6 +4,7 @@ import os
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any, Callable
 
 from fastapi import Request
 from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage
@@ -26,9 +27,11 @@ from langchain.agents.middleware import (
 from langchain.agents.middleware import ModelRequest, ModelResponse, AgentMiddleware
 from langchain.messages import SystemMessage
 from app.core.llm import get_model
-from typing import Callable
 
 INTERRUPT_FOR_USERINPUT_NODE = "interrupt_for_userinput"
+PPT_AGENT_NAME = "ppt_generate_agent"
+PPT_AGENT_NODE = "ppt_generate_agent_node"
+ROOT_STREAMING_NODES = {"normal_chat_node", "follow_up_questioner", "teaching_design_planner"}
 
 
 def get_thread_config(thread_id: str) -> RunnableConfig:
@@ -114,7 +117,31 @@ class AgentRuntime:
             shell_command = ["cmd.exe", "/Q", "/K"]
         else:
             shell_command = ["/bin/bash"]
-        self.agent_runnable = create_agent(
+        middleware = [
+            FilesystemFileSearchMiddleware(
+                root_path=str(self.backend_root),
+                use_ripgrep=True,
+            ),
+            ShellToolMiddleware(
+                workspace_root=str(self.backend_root),
+                execution_policy=HostExecutionPolicy(),
+                shell_command=shell_command,
+                tool_description=(
+                    "Shell for system-command tasks only. "
+                    "Use cmd because you are working in windows now. "
+                    "Use this tool only when a task explicitly requires OS/CLI execution, "
+                    "such as npm, ffmpeg, process diagnostics, or filesystem commands "
+                    "that cannot be completed through dedicated tools. "
+                ),
+            ),
+            SkillPromptMiddleware(skill_registry),
+            ToolRetryMiddleware(
+                max_retries=3,
+                backoff_factor=0.0,
+                initial_delay=1.0,
+            ),
+        ]
+        self.attachment_agent_runnable = create_agent(
             model=get_model(streaming=True),
             tools=self.skill_toolset.tools,
             system_prompt=(
@@ -125,30 +152,19 @@ class AgentRuntime:
                 # "Do NOT use shell for docx/pdf/xlsx analysis. "
                 "For document analysis, use 'run_skill_script' instead. "
             ),
-            middleware=[
-                FilesystemFileSearchMiddleware(
-                    root_path=str(self.backend_root),
-                    use_ripgrep=True,
-                ),
-                ShellToolMiddleware(
-                    workspace_root=str(self.backend_root),
-                    execution_policy=HostExecutionPolicy(),
-                    shell_command=shell_command,
-                    tool_description=(
-                        "Shell for system-command tasks only. "
-                        "Use cmd because you are working in windows now. "
-                        "Use this tool only when a task explicitly requires OS/CLI execution, "
-                        "such as npm, ffmpeg, process diagnostics, or filesystem commands "
-                        "that cannot be completed through dedicated tools. "
-                    ),
-                ),
-                SkillPromptMiddleware(skill_registry),
-                ToolRetryMiddleware(
-                    max_retries=3,
-                    backoff_factor=0.0,
-                    initial_delay=1.0,
-                ),
-            ],
+            middleware=middleware,
+            name="attachment_skill_agent",
+        )
+        self.ppt_agent_runnable = create_agent(
+            model=get_model(streaming=False),
+            tools=self.skill_toolset.tools,
+            system_prompt=(
+                "You are a ppt generate agent embedded inside a LangGraph workflow. "
+                "Use the teaching design plan already present and user's messages in the conversation as your primary source of truth. "
+                "Use skills and tools to generate a ppt according to user' request. "
+            ),
+            middleware=middleware,
+            name=PPT_AGENT_NAME,
         )
 
         self.checkpointer = checkpointer
@@ -156,14 +172,14 @@ class AgentRuntime:
         self.graph = build_agent_graph(
             checkpointer=checkpointer,
             rag_runtime=rag_runtime,
-            agent_runnable=self.agent_runnable
+            agent_runnable=self.ppt_agent_runnable,
         )
 
         self.streaming_graph = build_agent_graph(
             streaming=True,
             checkpointer=checkpointer,
             rag_runtime=rag_runtime,
-            agent_runnable=self.agent_runnable
+            agent_runnable=self.ppt_agent_runnable,
         )
         self._thread_locks: dict[str, asyncio.Lock] = {}
         self._thread_locks_guard = asyncio.Lock()
@@ -180,7 +196,7 @@ class AgentRuntime:
             + "\n".join(f"- {Path(file_path)}" for file_path in file_paths)
         )
         final_msg_content = ""
-        async for chunk in self.agent_runnable.astream(
+        async for chunk in self.attachment_agent_runnable.astream(
             {
                 "messages": [{"role": "user", "content": user_prompt}]
             },
@@ -189,17 +205,17 @@ class AgentRuntime:
         ):
             if chunk["type"] == "updates":
                 for step, data in chunk["data"].items():
-                    if step == 'tools':
+                    if step == "tools":
                         print("======================ToolMessage========================")
                         print(f"ToolMessage: {data['messages'][-1].content}. ToolName: {data['messages'][-1].name}")
-                    if step == 'model':
-                        if data['messages'][-1].content:
+                    if step == "model":
+                        if data["messages"][-1].content:
                             print("======================AIMessage==========================")
-                            print(f'AIMessage: {data['messages'][-1].content}')
-                        if data['messages'][-1].tool_calls:
+                            print(f"AIMessage: {data['messages'][-1].content}")
+                        if data["messages"][-1].tool_calls:
                             print("======================AI_Tool_calls======================")
                             print(f"Tool_calls: {data['messages'][-1].tool_calls}")
-                        final_msg_content = data['messages'][-1].content
+                        final_msg_content = data["messages"][-1].content
         return final_msg_content
 
     async def _get_thread_lock(self, thread_id: str) -> asyncio.Lock:
@@ -211,7 +227,7 @@ class AgentRuntime:
             return lock
 
     async def _should_resume_thread(self, thread_id: str) -> bool:
-        state_snapshot = await self.graph.aget_state(get_thread_config(thread_id))
+        state_snapshot = await self.streaming_graph.aget_state(get_thread_config(thread_id))
         interrupts = getattr(state_snapshot, "interrupts", ()) or ()
         next_nodes = tuple(getattr(state_snapshot, "next", ()) or ())
         return bool(interrupts) and INTERRUPT_FOR_USERINPUT_NODE in next_nodes
@@ -246,27 +262,18 @@ class AgentRuntime:
             graph_input["plan_id"] = plan_id
         return graph_input
 
-    # async def invoke_agent(
-    #     self,
-    #     message: str,
-    #     thread_id: str,
-    #     *,
-    #     plan_id: int | None = None,
-    #     attachment_text: str | None = None,
-    # ) -> str:
-    #     lock = await self._get_thread_lock(thread_id)
-    #     async with lock:
-    #         graph_input = await self._get_graph_input_with_plan(
-    #             message,
-    #             thread_id,
-    #             plan_id=plan_id,
-    #             attachment_text=attachment_text,
-    #         )
-    #         result = await self.graph.ainvoke(
-    #             graph_input,
-    #             config=get_thread_config(thread_id),
-    #         )
-    #     return get_final_response_text(result["messages"])
+    def _should_emit_text_chunk(
+        self,
+        metadata: dict[str, Any],
+        namespace: tuple[str, ...],
+    ) -> bool:
+        langgraph_node = metadata.get("langgraph_node")
+        lc_agent_name = metadata.get("lc_agent_name")
+        return (
+            langgraph_node in ROOT_STREAMING_NODES
+            # or any(part.startswith(f"{GRAPH_AGENT_NODE}:") for part in namespace)
+            # or lc_agent_name == GRAPH_AGENT_NAME
+        )
 
     async def stream_agent_response(
         self,
@@ -287,12 +294,23 @@ class AgentRuntime:
                 attachment_paths=attachment_paths
             )
             received_text_chunk = False
-            async for chunk, metadata in self.streaming_graph.astream(
+            async for event in self.streaming_graph.astream(
                 graph_input,
                 config=get_thread_config(thread_id),
                 stream_mode="messages",
+                subgraphs=True,
+                version="v2",
             ):
-                if not isinstance(chunk, AIMessageChunk):
+                if event.get("type") != "messages":
+                    continue
+
+                chunk, metadata = event["data"]
+                if not isinstance(chunk, (AIMessageChunk, AIMessage)):
+                    continue
+                if not isinstance(metadata, dict):
+                    continue
+                namespace = tuple(event.get("ns", ()) or ())
+                if not self._should_emit_text_chunk(metadata, namespace):
                     continue
 
                 text = _message_to_text(chunk)
