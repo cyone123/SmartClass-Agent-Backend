@@ -1,4 +1,5 @@
 import json
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -22,6 +23,13 @@ def format_sse_event(data: str, *, event: str | None = None) -> str:
     return payload + "\n"
 
 
+def format_sse_json_event(payload: object, *, event: str) -> str:
+    return format_sse_event(
+        json.dumps(payload, ensure_ascii=False),
+        event=event,
+    )
+
+
 @router.post("/chat/stream")
 async def chat(
     message: ChatRequest,
@@ -37,12 +45,12 @@ async def chat(
         )
 
     plan_id = None
+    attachment_paths: list[str] | None = None
     if thread_id:
         session = await session_service.get_session_by_thread_id(db, thread_id)
         if session is not None:
             plan_id = session.plan_id
 
-    attachment_text = ""
     if attachment_ids:
         if plan_id is None:
             raise HTTPException(
@@ -55,19 +63,29 @@ async def chat(
             thread_id=thread_id,
             attachment_ids=attachment_ids,
         )
-        attachment_text = await file_service.parse_attachment_files(message.message, attachment_paths, agent_runtime)
 
     async def event_stream():
-        metadata = json.dumps({"thread_id": thread_id}, ensure_ascii=False)
-        yield format_sse_event(metadata, event="metadata")
+        run_id = uuid4().hex
+        yield format_sse_json_event(
+            {"thread_id": thread_id, "run_id": run_id},
+            event="metadata",
+        )
 
-        async for data in agent_runtime.stream_agent_response(
+        async for event in agent_runtime.stream_agent_events(
             message.message,
             thread_id,
+            run_id=run_id,
             plan_id=plan_id,
-            attachment_text=attachment_text or None,
+            attachment_paths=attachment_paths,
         ):
-            yield format_sse_event(data, event="message")
+            event_name = event.get("event")
+            payload = event.get("data")
+            # if event_name == "message":
+            #     yield format_sse_event(str(payload or ""), event="message")
+            #     continue
+
+            if event_name in {"progress", "token", "error"}:
+                yield format_sse_json_event(payload, event=event_name)
 
         yield format_sse_event("[DONE]", event="done")
 

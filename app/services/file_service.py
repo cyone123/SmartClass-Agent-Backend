@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.agent import AgentRuntime
+from app.core.progress import ProgressReporter
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -348,8 +349,17 @@ async def get_attachment_storage_paths_by_ids(
     return storage_paths
 
 
-async def parse_attachment_files(message: str, file_paths: list[str], agent_runtime: AgentRuntime) -> str:
-    return await agent_runtime.analyze_attachments(message, file_paths)
+async def parse_attachment_files(
+    message: str,
+    file_paths: list[str],
+    agent_runtime: AgentRuntime,
+    progress_reporter: ProgressReporter | None = None,
+) -> str:
+    return await agent_runtime.analyze_attachments(
+        message,
+        file_paths,
+        progress_reporter=progress_reporter,
+    )
 
 
 async def mark_file_indexing(db: AsyncSession, file_record: KnowledgeFile) -> KnowledgeFile:

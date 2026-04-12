@@ -1,32 +1,39 @@
 from __future__ import annotations
 
-import os
 import asyncio
+import os
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import Request
+from langchain.agents import create_agent
+from langchain.agents.middleware import (
+    FilesystemFileSearchMiddleware,
+    HostExecutionPolicy,
+    ShellToolMiddleware,
+    ToolRetryMiddleware,
+)
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain.messages import SystemMessage
 from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
 
-from app.core.graph import build_agent_graph, build_input_messages
-from app.core.rag import RagRuntime
-from app.core.skills import SkillRegistry, create_skill_registry, SkillToolset
 from app.config import get_backend_root
-from app.dependencies.db import close_agent_checkpointer, init_agent_checkpointer
-from langchain.agents import create_agent
-from langchain.agents.middleware import (
-    FilesystemFileSearchMiddleware,
-    ToolRetryMiddleware,
-    ShellToolMiddleware,
-    HostExecutionPolicy,
-)
-from langchain.agents.middleware import ModelRequest, ModelResponse, AgentMiddleware
-from langchain.messages import SystemMessage
+from app.core.graph import build_agent_graph, build_input_messages
 from app.core.llm import get_model
+from app.core.progress import (
+    ProgressReporter,
+    ProgressTracker,
+    register_progress_reporter,
+    unregister_progress_reporter,
+)
+from app.core.rag import RagRuntime
+from app.core.skills import SkillRegistry, SkillToolset, create_skill_registry
+from app.dependencies.db import close_agent_checkpointer, init_agent_checkpointer
 
 INTERRUPT_FOR_USERINPUT_NODE = "interrupt_for_userinput"
 PPT_AGENT_NAME = "ppt_generate_agent"
@@ -34,12 +41,20 @@ PPT_AGENT_NODE = "ppt_generate_agent_node"
 ROOT_STREAMING_NODES = {"normal_chat_node", "follow_up_questioner", "teaching_design_planner"}
 
 
-def get_thread_config(thread_id: str) -> RunnableConfig:
-    return {
-        "configurable": {
-            "thread_id": thread_id,
-        }
+def get_thread_config(
+    thread_id: str | None,
+    *,
+    run_id: str | None = None,
+    progress_reporter: ProgressReporter | None = None,
+) -> RunnableConfig:
+    configurable: dict[str, Any] = {
+        "thread_id": thread_id,
     }
+    if run_id is not None:
+        configurable["run_id"] = run_id
+    if progress_reporter is not None:
+        configurable["progress_reporter"] = progress_reporter
+    return {"configurable": configurable}
 
 
 def _message_to_text(message: AnyMessage) -> str:
@@ -123,15 +138,15 @@ class AgentRuntime:
                 use_ripgrep=True,
             ),
             ShellToolMiddleware(
-                workspace_root=str(self.backend_root),
+                workspace_root=str(self.backend_root / "workspace"),
                 execution_policy=HostExecutionPolicy(),
                 shell_command=shell_command,
                 tool_description=(
                     "Shell for system-command tasks only. "
                     "Use cmd because you are working in windows now. "
                     "Use this tool only when a task explicitly requires OS/CLI execution, "
-                    "such as npm, ffmpeg, process diagnostics, or filesystem commands "
-                    "that cannot be completed through dedicated tools. "
+                    "such as npm, ffmpeg that cannot be completed through dedicated tools. "
+                    "Do not use shell to running the scripts of skills, using the 'run_skill_script' tool instead.'"
                 ),
             ),
             SkillPromptMiddleware(skill_registry),
@@ -149,7 +164,6 @@ class AgentRuntime:
                 "materials or generate courseware. Use the available skills when the task "
                 "matches their descriptions. Prefer progressive disclosure: load the "
                 "skill instructions first, then read bundled resources or run skill scripts when needed. "
-                # "Do NOT use shell for docx/pdf/xlsx analysis. "
                 "For document analysis, use 'run_skill_script' instead. "
             ),
             middleware=middleware,
@@ -181,33 +195,49 @@ class AgentRuntime:
             rag_runtime=rag_runtime,
             agent_runnable=self.ppt_agent_runnable,
         )
-        self._thread_locks: dict[str, asyncio.Lock] = {}
+        self._thread_locks: dict[str | None, asyncio.Lock] = {}
         self._thread_locks_guard = asyncio.Lock()
 
-    async def analyze_attachments(self, message, file_paths: list[str]) -> str:
+    async def analyze_attachments(
+        self,
+        message: str,
+        file_paths: list[str],
+        progress_reporter: ProgressReporter | None = None,
+    ) -> str:
+        if progress_reporter:
+            progress_reporter.emit("attachment_analysis", "running")
+
         print("============正在分析附件信息=========")
         user_prompt = (
-            "Analyze the uploaded attachment files accroding to user's request. "
-            f"Load the proper skills based on the file and follow it. "
+            "Analyze the uploaded attachment files according to user's request. "
+            "Load the proper skills based on the file and follow it. "
             "Use bundled scripts or resources when needed, then return a concise but "
             "useful summary without any unnecessary content.\n\n"
-            f"user's message: {message}"
+            f"user's message: {message}\n"
             "Attachment file paths:\n"
             + "\n".join(f"- {Path(file_path)}" for file_path in file_paths)
         )
         final_msg_content = ""
-        async for chunk in self.attachment_agent_runnable.astream(
-            {
-                "messages": [{"role": "user", "content": user_prompt}]
-            },
-            stream_mode="updates",
-            version="v2",
-        ):
-            if chunk["type"] == "updates":
+
+        try:
+            async for chunk in self.attachment_agent_runnable.astream(
+                {
+                    "messages": [{"role": "user", "content": user_prompt}]
+                },
+                stream_mode="updates",
+                version="v2",
+            ):
+                if chunk["type"] != "updates":
+                    continue
+
                 for step, data in chunk["data"].items():
                     if step == "tools":
                         print("======================ToolMessage========================")
-                        print(f"ToolMessage: {data['messages'][-1].content}. ToolName: {data['messages'][-1].name}")
+                        print(
+                            "ToolMessage: "
+                            f"{data['messages'][-1].content}. "
+                            f"ToolName: {data['messages'][-1].name}"
+                        )
                     if step == "model":
                         if data["messages"][-1].content:
                             print("======================AIMessage==========================")
@@ -216,9 +246,16 @@ class AgentRuntime:
                             print("======================AI_Tool_calls======================")
                             print(f"Tool_calls: {data['messages'][-1].tool_calls}")
                         final_msg_content = data["messages"][-1].content
+        except Exception as exc:
+            if progress_reporter:
+                progress_reporter.emit("attachment_analysis", "failed", detail=str(exc))
+            raise
+
+        if progress_reporter:
+            progress_reporter.emit("attachment_analysis", "success", detail="已完成附件分析")
         return final_msg_content
 
-    async def _get_thread_lock(self, thread_id: str) -> asyncio.Lock:
+    async def _get_thread_lock(self, thread_id: str | None) -> asyncio.Lock:
         async with self._thread_locks_guard:
             lock = self._thread_locks.get(thread_id)
             if lock is None:
@@ -226,23 +263,22 @@ class AgentRuntime:
                 self._thread_locks[thread_id] = lock
             return lock
 
-    async def _should_resume_thread(self, thread_id: str) -> bool:
+    async def _should_resume_thread(self, thread_id: str | None) -> bool:
+        if not thread_id:
+            return False
         state_snapshot = await self.streaming_graph.aget_state(get_thread_config(thread_id))
         interrupts = getattr(state_snapshot, "interrupts", ()) or ()
         next_nodes = tuple(getattr(state_snapshot, "next", ()) or ())
         return bool(interrupts) and INTERRUPT_FOR_USERINPUT_NODE in next_nodes
 
-    async def _get_graph_input(self, message: str, thread_id: str):
-        return await self._get_graph_input_with_plan(message, thread_id, plan_id=None)
-
     async def _get_graph_input_with_plan(
         self,
         message: str,
-        thread_id: str,
+        thread_id: str | None,
         *,
         plan_id: int | None,
         attachment_text: str | None = None,
-        attachment_paths: list[str] | None = None
+        attachment_paths: list[str] | None = None,
     ):
         if await self._should_resume_thread(thread_id):
             if attachment_text:
@@ -250,7 +286,7 @@ class AgentRuntime:
                     resume={
                         "message": message,
                         "attachment_text": attachment_text,
-                        "attachment_paths": attachment_paths
+                        "attachment_paths": attachment_paths,
                     }
                 )
             return Command(resume=message)
@@ -268,62 +304,132 @@ class AgentRuntime:
         namespace: tuple[str, ...],
     ) -> bool:
         langgraph_node = metadata.get("langgraph_node")
-        lc_agent_name = metadata.get("lc_agent_name")
-        return (
-            langgraph_node in ROOT_STREAMING_NODES
-            # or any(part.startswith(f"{GRAPH_AGENT_NODE}:") for part in namespace)
-            # or lc_agent_name == GRAPH_AGENT_NAME
-        )
+        _ = namespace
+        return langgraph_node in ROOT_STREAMING_NODES
 
-    async def stream_agent_response(
+    async def stream_agent_events(
         self,
         message: str,
-        thread_id: str,
+        thread_id: str | None,
         *,
+        run_id: str,
         plan_id: int | None = None,
-        attachment_text: str | None = None,
-        attachment_paths: list[str] | None = None
-    ) -> AsyncIterator[str]:
-        lock = await self._get_thread_lock(thread_id)
-        async with lock:
-            graph_input = await self._get_graph_input_with_plan(
-                message,
-                thread_id,
-                plan_id=plan_id,
-                attachment_text=attachment_text,
-                attachment_paths=attachment_paths
-            )
-            received_text_chunk = False
-            async for event in self.streaming_graph.astream(
-                graph_input,
-                config=get_thread_config(thread_id),
-                stream_mode="messages",
-                subgraphs=True,
-                version="v2",
-            ):
-                if event.get("type") != "messages":
-                    continue
+        attachment_paths: list[str] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        graph_thread_id = thread_id or run_id
+        lock = await self._get_thread_lock(graph_thread_id)
+        event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
 
-                chunk, metadata = event["data"]
-                if not isinstance(chunk, (AIMessageChunk, AIMessage)):
-                    continue
-                if not isinstance(metadata, dict):
-                    continue
-                namespace = tuple(event.get("ns", ()) or ())
-                if not self._should_emit_text_chunk(metadata, namespace):
-                    continue
+        def emit_progress_event(event: dict[str, Any]) -> None:
+            # Sync graph nodes may run in a worker thread, so queue writes must
+            # hop back to the main event loop to be visible to the SSE stream.
+            loop.call_soon_threadsafe(event_queue.put_nowait, event)
 
-                text = _message_to_text(chunk)
-                if text:
-                    received_text_chunk = True
-                    yield text
+        progress_tracker = ProgressTracker(run_id=run_id)
+        progress_reporter = ProgressReporter(
+            progress_tracker,
+            emit_event=emit_progress_event,
+        )
+        register_progress_reporter(run_id, progress_reporter)
 
-            if not received_text_chunk:
-                print(
-                    "[stream_agent_response] completed without any text chunks. "
-                    "This usually means nested model calls did not propagate streaming "
-                    "callbacks, or the upstream model endpoint did not return stream tokens."
+        async def produce_events() -> None:
+            try:
+                async with lock:
+                    attachment_text: str | None = None
+                    if attachment_paths:
+                        attachment_text = await self.analyze_attachments(
+                            message,
+                            attachment_paths,
+                            progress_reporter=progress_reporter,
+                        )
+
+                    graph_input = await self._get_graph_input_with_plan(
+                        message,
+                        graph_thread_id,
+                        plan_id=plan_id,
+                        attachment_text=attachment_text,
+                        attachment_paths=attachment_paths,
+                    )
+                    received_text_chunk = False
+                    async for event in self.streaming_graph.astream(
+                        graph_input,
+                        config=get_thread_config(
+                            graph_thread_id,
+                            run_id=run_id,
+                        ),
+                        stream_mode="messages",
+                        subgraphs=True,
+                        version="v2",
+                    ):
+                        if event.get("type") != "messages":
+                            continue
+
+                        chunk, metadata = event["data"]
+                        if not isinstance(chunk, (AIMessageChunk, AIMessage)):
+                            continue
+                        if not isinstance(metadata, dict):
+                            continue
+
+                        namespace = tuple(event.get("ns", ()) or ())
+                        if not self._should_emit_text_chunk(metadata, namespace):
+                            continue
+
+                        text = _message_to_text(chunk)
+                        if text:
+                            received_text_chunk = True
+                            await event_queue.put(
+                                {
+                                    "event": "token",
+                                    "data": {
+                                        "run_id": run_id,
+                                        "text": text,
+                                    },
+                                }
+                            )
+                            # await event_queue.put(
+                            #     {
+                            #         "event": "message",
+                            #         "data": text,
+                            #     }
+                            # )
+
+                    if not received_text_chunk:
+                        print(
+                            "[stream_agent_events] completed without any text chunks. "
+                            "This usually means nested model calls did not propagate "
+                            "streaming callbacks, or the upstream model endpoint did not "
+                            "return stream tokens."
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await event_queue.put(
+                    {
+                        "event": "error",
+                        "data": {
+                            "run_id": run_id,
+                            "message": str(exc),
+                        },
+                    }
                 )
+            finally:
+                await event_queue.put({"event": "__end__", "data": None})
+
+        producer = asyncio.create_task(produce_events())
+
+        try:
+            while True:
+                item = await event_queue.get()
+                if item["event"] == "__end__":
+                    break
+                yield item
+        finally:
+            unregister_progress_reporter(run_id)
+            if not producer.done():
+                producer.cancel()
+            with suppress(asyncio.CancelledError):
+                await producer
 
     async def close(self) -> None:
         self._thread_locks.clear()

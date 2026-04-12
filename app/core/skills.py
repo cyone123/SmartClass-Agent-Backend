@@ -343,8 +343,7 @@ class SkillToolset:
         ) -> str:
             """Execute a script from the skill's scripts/ directory.
 
-            Use this for deterministic file processing or transformations that are
-            better handled by code than by the model alone. Pass optional script
+            Use this for tasks that need to run scripts of specific skill. Pass optional script
             arguments with `script_args`, ideally as a JSON array of strings.
             """
             print(f"==============尝试运行脚本skills:{skill_name}=================")

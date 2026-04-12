@@ -13,7 +13,7 @@ A .docx file is a ZIP archive containing XML files.
 
 | Task | Approach |
 |------|----------|
-| Read/analyze content | unpack for raw XML |
+| Read/analyze content | user script to unpack for raw XML |
 | Create new document | Use `docx-js` - see Creating New Documents below |
 | Edit existing document | Unpack → edit XML → repack - see Editing Existing Documents below |
 
@@ -29,8 +29,9 @@ python scripts/office/soffice.py --headless --convert-to docx document.doc
 
 ```bash
 # Raw XML access
-python scripts/office/unpack.py document.docx unpacked/
+python scripts/office/unpack.py document.docx /unpacked/
 ```
+Use the "load_skill_resource" tool to load the unpacked files. Relative path like: "unpacked/word/document.xml"
 
 ### Converting to Images
 
