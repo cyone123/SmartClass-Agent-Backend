@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from pathlib import Path
@@ -17,14 +18,14 @@ from langchain.agents.middleware import (
 )
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.messages import SystemMessage
-from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
 
 from app.config import get_backend_root
 from app.core.graph import build_agent_graph, build_input_messages
-from app.core.llm import get_model
+from app.core.llm import get_small_model, get_model
 from app.core.progress import (
     ProgressReporter,
     ProgressTracker,
@@ -39,6 +40,8 @@ INTERRUPT_FOR_USERINPUT_NODE = "interrupt_for_userinput"
 PPT_AGENT_NAME = "ppt_generate_agent"
 PPT_AGENT_NODE = "ppt_generate_agent_node"
 ROOT_STREAMING_NODES = {"normal_chat_node", "follow_up_questioner", "teaching_design_planner"}
+SUGGESTION_COUNT = 3
+SUGGESTION_CONTEXT_WINDOW = 6
 
 
 def get_thread_config(
@@ -82,6 +85,62 @@ def get_final_response_text(messages: list[AnyMessage]) -> str:
         if isinstance(message, AIMessage):
             return _message_to_text(message).strip()
     return ""
+
+
+def _normalize_suggestion_text(value: str) -> str:
+    text = re.sub(r"^\s*[-*•]\s*", "", value or "")
+    text = re.sub(r"^\s*\d+[.)、．]\s*", "", text)
+    text = text.strip().strip("\"'“”‘’")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _sanitize_suggestions(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = _normalize_suggestion_text(item)
+        if not text:
+            continue
+        dedupe_key = text.casefold()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized.append(text)
+
+    return normalized[:SUGGESTION_COUNT]
+
+
+def _split_suggestion_lines(value: str) -> list[str]:
+    if not value:
+        return []
+
+    raw_lines = [
+        line.strip()
+        for line in re.split(r"\r?\n+", value)
+        if line.strip()
+    ]
+
+    return raw_lines[: max(SUGGESTION_COUNT * 2, SUGGESTION_COUNT)]
+
+
+def _build_suggestion_conversation(messages: list[AnyMessage]) -> list[str]:
+    visible_messages = [
+        message
+        for message in messages
+        if isinstance(message, (HumanMessage, AIMessage)) and not isinstance(message, ToolMessage)
+    ]
+    conversation_slice = visible_messages[-SUGGESTION_CONTEXT_WINDOW:]
+
+    conversation_lines: list[str] = []
+    for message in conversation_slice:
+        role = "用户" if isinstance(message, HumanMessage) else "AI"
+        text = _message_to_text(message).strip()
+        if text:
+            conversation_lines.append(f"{role}: {text}")
+    return conversation_lines
 
 
 class SkillPromptMiddleware(AgentMiddleware):
@@ -180,6 +239,7 @@ class AgentRuntime:
             middleware=middleware,
             name=PPT_AGENT_NAME,
         )
+        self.suggestion_generator = get_small_model(streaming=False)
 
         self.checkpointer = checkpointer
         self.rag_runtime = rag_runtime
@@ -307,6 +367,59 @@ class AgentRuntime:
         _ = namespace
         return langgraph_node in ROOT_STREAMING_NODES
 
+    async def _get_visible_thread_messages(self, thread_id: str) -> list[AnyMessage]:
+        state_snapshot = await self.graph.aget_state(get_thread_config(thread_id))
+        values = getattr(state_snapshot, "values", {}) or {}
+        messages = values.get("messages", []) or []
+        return [message for message in messages if isinstance(message, BaseMessage)]
+
+    async def _generate_follow_up_suggestions(self, thread_id: str) -> list[str]:
+        messages = await self._get_visible_thread_messages(thread_id)
+        final_response_text = get_final_response_text(messages)
+        if not final_response_text:
+            return []
+
+        conversation_lines = _build_suggestion_conversation(messages)
+        if not conversation_lines:
+            return []
+
+        prompt_messages = [
+            SystemMessage(
+                content=(
+                    "我将提供给你一些ai与用户的对话内容，请你扮演用户回复ai，"
+                    "生成恰好 3 个下一步最自然、最有价值的中文回复，一定要简短。"
+                    "每条建议都必须是用户可以直接发送给 AI 的完整内容。"
+                    "不要使用编号、项目符号或引导语。"
+                    "建议要简洁、清晰、和刚刚的 AI 回复紧密相关。"
+                    "请严格使用换行分隔每一条建议，每行只写一条建议。"
+                )
+            ),
+            HumanMessage(
+                content=(
+                    "请根据下面的对话生成 3 个回复。\n"
+                    "返回格式必须是纯文本，共 3 行，每行 1 条回复，不要输出任何其他内容：\n\n"
+                    + "\n".join(conversation_lines)
+                    + "\n\n现在直接输出这 3 行回复。"
+                )
+            ),
+        ]
+
+        try:
+            result = await self.suggestion_generator.ainvoke(prompt_messages)
+        except Exception as exc:
+            print(f"[suggestions] generation failed: {exc}")
+            return []
+
+        suggestions = _sanitize_suggestions(
+            _split_suggestion_lines(_message_to_text(result).strip())
+        )
+        if len(suggestions) < SUGGESTION_COUNT:
+            print(
+                "[suggestions] discarded because the model did not return enough unique suggestions."
+            )
+            return []
+        return suggestions
+
     async def stream_agent_events(
         self,
         message: str,
@@ -387,12 +500,6 @@ class AgentRuntime:
                                     },
                                 }
                             )
-                            # await event_queue.put(
-                            #     {
-                            #         "event": "message",
-                            #         "data": text,
-                            #     }
-                            # )
 
                     if not received_text_chunk:
                         print(
@@ -401,6 +508,20 @@ class AgentRuntime:
                             "streaming callbacks, or the upstream model endpoint did not "
                             "return stream tokens."
                         )
+                    elif graph_thread_id:
+                        suggestions = await self._generate_follow_up_suggestions(
+                            graph_thread_id
+                        )
+                        if suggestions:
+                            await event_queue.put(
+                                {
+                                    "event": "suggestions",
+                                    "data": {
+                                        "run_id": run_id,
+                                        "suggestions": suggestions,
+                                    },
+                                }
+                            )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

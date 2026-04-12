@@ -84,7 +84,7 @@ async def chat(
             #     yield format_sse_event(str(payload or ""), event="message")
             #     continue
 
-            if event_name in {"progress", "token", "error"}:
+            if event_name in {"progress", "token", "error", "suggestions"}:
                 yield format_sse_json_event(payload, event=event_name)
 
         yield format_sse_event("[DONE]", event="done")

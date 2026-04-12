@@ -34,7 +34,7 @@ router = structured_output_llm.with_structured_output(
 metadata_extractor = structured_output_llm.with_structured_output(
     TeachingMetadata,
     method="json_schema",
-    strict=True,
+    strict=True
 )
 
 
@@ -121,8 +121,8 @@ def metadata_structer_node(
     current_metadata = state.get("teaching_metadata")
     system_prompt = (
         "You are a structured metadata node in an intelligent agent that helps teachers "
-        "prepare lessons. Please extract teaching elements based on the existing "
-        "information and output JSON. Ensure all information is obtained from the user "
+        "prepare lessons. Please extract teaching elements based on the user's messages "
+        "and output JSON strictly according to given fomart. Ensure all information is obtained from the user "
         "and do not fabricate missing details. Fill incomplete fields with None. Set "
         "is_complete to true when the elements are complete enough for retrieval and "
         "instructional design. "
@@ -174,6 +174,7 @@ async def follow_up_questioner(state: TeachingAssistantState):
     system_prompt = (
         "你是一个帮助老师备课的智能体中的主动追问节点。"
         "请根据当前缺失的教学要素，向用户提出问题来补全要素。"
+        # f"用户的上一个回答：{state["messages"][-1].content}"
         f"当前教学要素：{state.get('teaching_metadata')}"
     )
     response = await llm.ainvoke([SystemMessage(content=system_prompt)])
