@@ -22,7 +22,7 @@ JWT_SECRET = "Szn90fT3cXjWNS9ZYMN5XsiVEmd1qREM"
 
 
 @router.get("/file/knowledgeFile", response_model=KnowledgeFileListResponse)
-async def list_plan_files(
+async def list_knowledge_files(
     plan_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> KnowledgeFileListResponse:
@@ -31,7 +31,7 @@ async def list_plan_files(
 
 
 @router.post("/file/knowledgeFile/upload", response_model=KnowledgeFileResponse)
-async def upload_file(
+async def upload_knowledge_file(
     plan_id: int,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),

@@ -11,6 +11,7 @@ from typing import Any, Callable
 from fastapi import Request
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
+    AgentState,
     FilesystemFileSearchMiddleware,
     HostExecutionPolicy,
     ShellToolMiddleware,
@@ -34,6 +35,7 @@ from app.core.progress import (
 )
 from app.core.rag import RagRuntime
 from app.core.skills import SkillRegistry, SkillToolset, create_skill_registry
+from app.core.workspace import WorkspaceToolset
 from app.dependencies.db import close_agent_checkpointer, init_agent_checkpointer
 
 INTERRUPT_FOR_USERINPUT_NODE = "interrupt_for_userinput"
@@ -42,6 +44,19 @@ PPT_AGENT_NODE = "ppt_generate_agent_node"
 ROOT_STREAMING_NODES = {"normal_chat_node", "follow_up_questioner", "teaching_design_planner"}
 SUGGESTION_COUNT = 3
 SUGGESTION_CONTEXT_WINDOW = 6
+WORKSPACE_TOOL_NAMES = {
+    "list_workspace_files",
+    "read_workspace_file",
+    "write_workspace_file",
+    "run_workspace_code",
+}
+BLOCKED_SHELL_PATTERN = re.compile(
+    r"(?i)(^|\s)(python|python3|py|node|npm|npx|pip|pip3|pnpm|yarn|uv)\b"
+)
+
+
+class SkillAwareAgentState(AgentState[Any], total=False):
+    active_skills: list[str]
 
 
 def get_thread_config(
@@ -153,17 +168,18 @@ class SkillPromptMiddleware(AgentMiddleware):
         ]
         self.skills_prompt = "\n".join(skill_lines)
 
-    def awrap_model_call(
-        self,
-        request: ModelRequest,
-        handler: Callable[[ModelRequest], ModelResponse],
-    ) -> ModelResponse:
+    def _inject_skill_catalog(self, request: ModelRequest) -> ModelRequest:
         skills_addendum = (
             f"\n\n## Available Skills\n\n{self.skills_prompt}\n\n"
             "Only the metadata above is preloaded. When a request matches a skill, "
             "use `load_skill` to read its instructions. Then use `read_skill_resource` "
-            "or `run_skill_script` only when the loaded skill tells you to. When "
-            "calling `run_skill_script`, pass `script_args` as a string array."
+            "or `run_skill_script` when you need to read relevant resource or run specific script. "
+            "Only use workspace code tools after a skill is loaded and only when "
+            "that skill need coding operation. Use workspace code tools for "
+            "temporary Python or JavaScript files, `run_skill_script` for scripts "
+            "that already ship with the skill, and reserve `shell` for non-code "
+            "system commands only. When calling `run_skill_script`, pass "
+            "`script_args` as a string array."
         )
 
         if request.system_message is None:
@@ -173,8 +189,224 @@ class SkillPromptMiddleware(AgentMiddleware):
                 {"type": "text", "text": skills_addendum}
             ]
             new_system_message = SystemMessage(content=new_content)
-        modified_request = request.override(system_message=new_system_message)
-        return handler(modified_request)
+        return request.override(system_message=new_system_message)
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        return handler(self._inject_skill_catalog(request))
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        return await handler(self._inject_skill_catalog(request))
+
+
+class SkillExecutionPolicyMiddleware(AgentMiddleware[SkillAwareAgentState, Any, Any]):
+    """Track active skills and guard skill-aware execution tools."""
+
+    state_schema = SkillAwareAgentState
+
+    def __init__(self, registry: SkillRegistry) -> None:
+        self.registry = registry
+
+    def _get_active_skill_names(self, state: SkillAwareAgentState | dict[str, Any]) -> list[str]:
+        values = state.get("active_skills", []) or []
+        return [str(value) for value in values if isinstance(value, str)]
+
+    def _get_authorized_skills(
+        self,
+        state: SkillAwareAgentState | dict[str, Any],
+        *,
+        tool_name: str,
+    ) -> list[str]:
+        active_skill_names = self._get_active_skill_names(state)
+        return [
+            skill_name
+            for skill_name in active_skill_names
+            if self.registry.skill_allows_tool(skill_name, tool_name)
+        ]
+
+    def _build_active_skill_section(self, active_skill_names: list[str]) -> str:
+        if not active_skill_names:
+            return ""
+
+        lines = ["\n\n## Active Skills"]
+        for skill_name in active_skill_names:
+            skill = self.registry.get_skill(skill_name)
+            allowed_tools = ", ".join(skill.allowed_tools) if skill.allowed_tools else "none"
+            compatibility = skill.compatibility or "none"
+            lines.append(
+                f"- **{skill.name}**: allowed tools = {allowed_tools}; "
+                f"compatibility = {compatibility}"
+            )
+        lines.append(
+            "If you need temporary code, use workspace tools instead of `shell`. "
+            "Do not install dependencies yourself."
+        )
+        return "\n".join(lines)
+
+    def _tool_error_message(
+        self,
+        *,
+        tool_name: str,
+        tool_call_id: str | None,
+        message: str,
+    ) -> ToolMessage:
+        return ToolMessage(
+            content=message,
+            name=tool_name,
+            tool_call_id=tool_call_id or "missing-tool-call-id",
+            status="error",
+        )
+
+    def _is_blocked_shell_command(self, command: str) -> bool:
+        return bool(BLOCKED_SHELL_PATTERN.search(command or ""))
+
+    def _with_active_skill_section(self, request: ModelRequest) -> ModelRequest:
+        active_skill_names = self._get_active_skill_names(request.state)
+        active_skill_section = self._build_active_skill_section(active_skill_names)
+        if not active_skill_section:
+            return request
+
+        if request.system_message is None:
+            system_message = SystemMessage(content=active_skill_section.strip())
+        else:
+            system_message = SystemMessage(
+                content=list(request.system_message.content_blocks)
+                + [{"type": "text", "text": active_skill_section}]
+            )
+        return request.override(system_message=system_message)
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        return handler(self._with_active_skill_section(request))
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        return await handler(self._with_active_skill_section(request))
+
+    def _handle_tool_call(self, request):
+        tool_name = request.tool_call.get("name")
+        if not isinstance(tool_name, str):
+            return None
+
+        if tool_name in WORKSPACE_TOOL_NAMES:
+            authorized_skills = self._get_authorized_skills(request.state, tool_name=tool_name)
+            if not authorized_skills:
+                return self._tool_error_message(
+                    tool_name=tool_name,
+                    tool_call_id=request.tool_call.get("id"),
+                    message=(
+                        f"Skill authorization error: `{tool_name}` requires an active skill "
+                        "that explicitly lists it in `allowed-tools`. Load the right skill "
+                        "with `load_skill` first."
+                    ),
+                )
+
+        if tool_name == "shell":
+            args = request.tool_call.get("args", {}) or {}
+            command = args.get("command") if isinstance(args, dict) else None
+            if isinstance(command, str) and self._is_blocked_shell_command(command):
+                return self._tool_error_message(
+                    tool_name=tool_name,
+                    tool_call_id=request.tool_call.get("id"),
+                    message=(
+                        "Shell policy error: use workspace tools for Python/Node.js code "
+                        "execution and rely on host-managed dependencies instead of "
+                        "running installers from `shell`."
+                    ),
+                )
+
+        return None
+
+    def wrap_tool_call(self, request, handler):
+        guarded_response = self._handle_tool_call(request)
+        if guarded_response is not None:
+            return guarded_response
+        return handler(request)
+
+    async def awrap_tool_call(self, request, handler):
+        guarded_response = self._handle_tool_call(request)
+        if guarded_response is not None:
+            return guarded_response
+        return await handler(request)
+
+
+class AgentConsoleLoggingMiddleware(AgentMiddleware):
+    """Print model and tool activity to the console for debugging."""
+
+    def __init__(self, *, agent_name: str) -> None:
+        self.agent_name = agent_name
+
+    def _log_model_response(self, response: ModelResponse) -> None:
+        for message in response.result:
+            if not isinstance(message, AIMessage):
+                continue
+            if _message_to_text(message).strip():
+                print(f"======================{self.agent_name}:AIMessage==========================")
+                print(f"AIMessage: {_message_to_text(message)}")
+            if message.tool_calls:
+                print(f"======================{self.agent_name}:AI_Tool_calls======================")
+                print(f"Tool_calls: {message.tool_calls}")
+
+    def _log_tool_output(self, response: Any, *, fallback_tool_name: str | None = None) -> None:
+        tool_messages: list[ToolMessage] = []
+        if isinstance(response, ToolMessage):
+            tool_messages = [response]
+        elif isinstance(response, Command):
+            update = getattr(response, "update", None)
+            if isinstance(update, dict):
+                messages = update.get("messages", []) or []
+                tool_messages = [
+                    message for message in messages if isinstance(message, ToolMessage)
+                ]
+
+        for message in tool_messages:
+            print(f"======================{self.agent_name}:ToolMessage========================")
+            print(
+                "ToolMessage: "
+                f"{message.content}. "
+                f"ToolName: {message.name or fallback_tool_name}"
+            )
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        response = handler(request)
+        self._log_model_response(response)
+        return response
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        response = await handler(request)
+        self._log_model_response(response)
+        return response
+
+    def wrap_tool_call(self, request, handler):
+        response = handler(request)
+        self._log_tool_output(response, fallback_tool_name=request.tool_call.get("name"))
+        return response
+
+    async def awrap_tool_call(self, request, handler):
+        response = await handler(request)
+        self._log_tool_output(response, fallback_tool_name=request.tool_call.get("name"))
+        return response
 
 
 class AgentRuntime:
@@ -187,11 +419,12 @@ class AgentRuntime:
         self.skill_registry = skill_registry
         self.backend_root = get_backend_root()
         self.skill_toolset = SkillToolset(skill_registry)
+        self.workspace_toolset = WorkspaceToolset()
         if os.name == "nt":
             shell_command = ["cmd.exe", "/Q", "/K"]
         else:
             shell_command = ["/bin/bash"]
-        middleware = [
+        base_middleware = [
             FilesystemFileSearchMiddleware(
                 root_path=str(self.backend_root),
                 use_ripgrep=True,
@@ -204,39 +437,51 @@ class AgentRuntime:
                     "Shell for system-command tasks only. "
                     "Use cmd because you are working in windows now. "
                     "Use this tool only when a task explicitly requires OS/CLI execution, "
-                    "such as npm, ffmpeg that cannot be completed through dedicated tools. "
-                    "Do not use shell to running the scripts of skills, using the 'run_skill_script' tool instead.'"
+                    "such as ffmpeg that cannot be completed through dedicated tools. "
+                    "Do not use shell to run Python/Node.js code or to run the scripts of skills. "
+                    "Use workspace tools for temporary code and `run_skill_script` for scripts bundled with a skill."
                 ),
             ),
             SkillPromptMiddleware(skill_registry),
+            SkillExecutionPolicyMiddleware(skill_registry),
             ToolRetryMiddleware(
                 max_retries=3,
                 backoff_factor=0.0,
                 initial_delay=1.0,
             ),
         ]
+        attachment_middleware = list(base_middleware)
+        ppt_middleware = [
+            *base_middleware,
+            AgentConsoleLoggingMiddleware(agent_name="ppt_agent"),
+        ]
         self.attachment_agent_runnable = create_agent(
             model=get_model(streaming=True),
-            tools=self.skill_toolset.tools,
+            tools=self.skill_toolset.tools + self.workspace_toolset.tools,
             system_prompt=(
                 "You are an agent that analyze uploaded "
                 "materials or generate courseware. Use the available skills when the task "
                 "matches their descriptions. Prefer progressive disclosure: load the "
                 "skill instructions first, then read bundled resources or run skill scripts when needed. "
-                "For document analysis, use 'run_skill_script' instead. "
+                "If a loaded skill explicitly allows workspace tools, you may write temporary "
+                "Python or JavaScript files to the agent workspace and execute them there. "
+                "For document analysis, prefer `run_skill_script`. Never use `shell` to run "
+                "Python, Node.js, npm, or pip commands."
             ),
-            middleware=middleware,
+            middleware=attachment_middleware,
             name="attachment_skill_agent",
         )
         self.ppt_agent_runnable = create_agent(
             model=get_model(streaming=False),
-            tools=self.skill_toolset.tools,
+            tools=self.skill_toolset.tools + self.workspace_toolset.tools,
             system_prompt=(
                 "You are a ppt generate agent embedded inside a LangGraph workflow. "
-                "Use the teaching design plan already present and user's messages in the conversation as your primary source of truth. "
+                "Use the teaching design plan already present and user's requests as your primary source of truth. "
                 "Use skills and tools to generate a ppt according to user' request. "
+                "For new code, use workspace tools. For scripts that already belong to a skill, "
+                "use `run_skill_script`. Do not use `shell` for Python/Node.js execution or installs."
             ),
-            middleware=middleware,
+            middleware=ppt_middleware,
             name=PPT_AGENT_NAME,
         )
         self.suggestion_generator = get_small_model(streaming=False)
@@ -262,6 +507,9 @@ class AgentRuntime:
         self,
         message: str,
         file_paths: list[str],
+        *,
+        thread_id: str | None = None,
+        run_id: str | None = None,
         progress_reporter: ProgressReporter | None = None,
     ) -> str:
         if progress_reporter:
@@ -284,6 +532,11 @@ class AgentRuntime:
                 {
                     "messages": [{"role": "user", "content": user_prompt}]
                 },
+                config=get_thread_config(
+                    thread_id or run_id,
+                    run_id=run_id,
+                    progress_reporter=progress_reporter,
+                ),
                 stream_mode="updates",
                 version="v2",
             ):
@@ -454,6 +707,8 @@ class AgentRuntime:
                         attachment_text = await self.analyze_attachments(
                             message,
                             attachment_paths,
+                            thread_id=graph_thread_id,
+                            run_id=run_id,
                             progress_reporter=progress_reporter,
                         )
 

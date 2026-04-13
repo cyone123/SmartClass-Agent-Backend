@@ -1,188 +1,107 @@
 ---
 name: ppt-generator
-description: 使用此 Skill 将任意文档、报告、主题内容转换为高质量的可视化 PPT 或网页展示。当用户想要制作 PPT、幻灯片、演示文稿、将报告/年报/财报转成可视化页面，或者提到"做PPT"、"生成PPT"、"转成幻灯片"、"可视化报告"、"演示文稿"、"直出pptx"等需求时，必须触发此 Skill。支持三种输出格式：① 可视化网页 HTML ② 浏览器可播放的 16:9 HTML ③ 直接导出 .pptx 文件（PowerPoint/WPS 可直接打开编辑）。采用卡片式布局 + Apple 发布会风格，视觉专业、信息清晰。
+description: 使用教学设计、文档摘要或主题信息生成可编辑的 PPT 相关产物。适用于制作课件、演示稿、16:9 播放型网页或导出 `.pptx` 文件。
+compatibility: |
+  Requires Node.js on the host. Exporting real `.pptx` files also requires `pptxgenjs`
+  to already be available in the host environment or bundled by the application. Do not
+  install dependencies at runtime with npm, pnpm, yarn, npx, pip, or shell package managers.
+allowed-tools:
+  - list_workspace_files
+  - read_workspace_file
+  - write_workspace_file
+  - run_workspace_code
+metadata:
+  default-output: pptx
+  preferred-runtime: node
 ---
 
 # PPT Generator Skill
 
-将文档、报告或主题内容转化为专业可视化演示的完整工作流。
+当用户要求“生成 PPT / 课件 / 幻灯片 / 可编辑演示稿”时加载本 skill。
 
-## 输出格式路由（优先判断）
+这个 skill 的职责不是直接让模型裸写整份产物，而是指导 agent：
 
-拿到需求后，**首先判断输出格式**，再进入对应工作流：
+1. 先判断输出格式。
+2. 再整理结构化内容。
+3. 最后在 workspace 中生成并执行临时代码。
 
-| 用户说… | 输出格式 | 走哪条路 |
-|--------|---------|---------|
-| "做个网页/可视化报告" | HTML 滚动页 | Step 1 → 2 → **3A** |
-| "做个PPT/幻灯片/可以播放" | HTML 16:9 | Step 1 → 2 → **3A** → **3B** |
-| "导出pptx/直出ppt/要pptx文件/要能在PowerPoint里打开" | `.pptx` 文件 | Step 1 → 2 → **3C** |
+## 工作原则
 
-**如果用户没有明确说明格式**，默认生成 `.pptx` 文件（最通用，可直接打开编辑）。
+- 先使用对话、教学设计方案、附件摘要作为主输入，不要凭空补事实。
+- 先 `load_skill`，再按需读取 `references/` 中的提示模板。
+- 需要新写代码时，只能使用 workspace 工具：
+  `write_workspace_file`、`read_workspace_file`、`list_workspace_files`、`run_workspace_code`。
+- 不要用 `shell` 运行 `python`、`node`、`npm`、`pip`。
+- 不要在代码里安装依赖；依赖是否存在由宿主环境决定。
+- 生成代码时优先写成单文件、可重复执行、带清晰注释的脚本。
 
----
+## 输出格式路由
 
-## Step 1：需求判断（快速）
+- 用户明确要 `.pptx`、PowerPoint、WPS 可编辑文件：走 `.pptx` 路径。
+- 用户明确要网页演示或浏览器播放：走 HTML 路径。
+- 用户没有说明格式：默认走 `.pptx` 路径。
 
-- 内容来源：用户上传文件、URL、还是只给了主题？→ 若是主题，先网络搜索资料
-- 品牌/主色调：能识别到品牌就自动用品牌色（小米橙 `#FF6900`、特斯拉红 `#CC0000`、华为红 `#CF0A2C` 等）
-- 页数要求：未指定则根据内容量自动决定（通常 8-12 页）
+## 推荐流程
 
-若用户已提供完整内容，直接进入 Step 3。
+### 1. 整理内容
 
----
+- 从已有教学设计、用户消息、附件摘要里提炼出：
+  主题、目标、页数预估、核心知识点、流程结构、需要强调的数据或案例。
+- 如果是长文档或报告，先参考 `references/outline-prompt.md` 生成适合 8-12 页的提纲。
 
-## Step 2：内容提炼（长文档/财报场景）
+### 2. 选择参考资料
 
-输入是长篇报告时，先提炼再制作。提炼提示词：
+- HTML 可视化页面：阅读 `references/html-prompt.md`。
+- SVG 单页视觉稿：阅读 `references/svg-prompt.md`。
+- `.pptx` 脚本结构：阅读 `references/pptx-scaffold.md`。
 
-```
-请以专业分析师视角深度分析以下内容，提炼：
-1. 核心结论与关键数据（重点标注数字、增长率、对比数据）
-2. 主要亮点与风险
-3. 结构化的章节划分建议（适合做成 8-12 页 PPT）
-输出一份结构清晰、数据准确的分析报告，不少于 2000 字。
-```
+只读取当前路径真正需要的参考文件，不要一次性加载全部资源。
 
-普通主题直接跳到 Step 3。
+### 3. 在 workspace 中写代码
 
----
+- 先把提纲或结构化输入写入一个 JSON 或 Markdown 文件，便于脚本读取和复用。
+- 再写主脚本，例如：
+  - `generate_ppt.js` for `.pptx`
+  - `generate_slides.js` or `generate_slides.py` for HTML
+- 代码里应显式读取 `AGENT_WORKSPACE_ROOT`、`AGENT_OUTPUT_DIR` 这些环境变量，输出产物写到 `AGENT_OUTPUT_DIR`。
 
-## Step 3A：生成 HTML 可视化网页
+### 4. 执行代码
 
-详细提示词见 `references/html-prompt.md`。
+- Node.js 脚本用 `run_workspace_code(language="node", entrypoint="generate_ppt.js")`
+- Python 脚本用 `run_workspace_code(language="python", entrypoint="generate_slides.py")`
+- 执行后检查返回的：
+  `exit_code`、`stdout`、`stderr`、`output_files`
 
-核心设计原则：
-- Apple 发布会卡片式布局，纯黑背景 `#000000`，深灰卡片 `#1a1a1a`
-- 自动识别品牌色作为高亮色
-- 关键数字超大展示（`text-5xl/6xl`），中英双语副标题
-- TailwindCSS + Chart.js + Font Awesome，全部 CDN，单文件输出
-- Intersection Observer 滚动触发淡入动画
+如果失败：
 
----
+- 先根据错误信息修正代码。
+- 必要时读取刚写入的文件再迭代。
+- 不要切换到 `shell` 重新跑同样的 Python / Node.js 逻辑。
 
-## Step 3B：HTML → 可播放 PPT 格式
+## `.pptx` 路径要求
 
-在 3A 生成的 HTML 上追加：
+- 优先使用 Node.js。
+- 如果宿主环境没有 `pptxgenjs`，明确说明是依赖缺失，不要尝试安装。
+- 代码生成的最终文件应写入 `AGENT_OUTPUT_DIR`，文件名清晰，例如 `lesson-slides.pptx`。
+- 页面比例默认 16:9。
+- 结构默认包含：
+  封面、目录/概览、核心知识页、活动设计页、总结页。
 
-```
-请修改HTML文件，改成类似PPT的形式，每页16:9，键盘左右键/点击圆点可切换。放大文字以适配16:9页面尺寸。
-```
+## HTML 路径要求
 
-浏览器 F11 全屏直接播放。
+- 输出单文件 HTML 优先。
+- 允许引用 CDN 资源，但不要在运行时依赖本地安装前端构建工具。
+- 保持 16:9 演示友好，适配桌面展示。
 
----
+## 失败处理
 
-## Step 3C：直出 .pptx 文件 ⭐
+- 缺少依赖：直接说明缺少什么依赖，以及这属于宿主环境问题。
+- 没有足够内容：先返回缺失信息，不要硬生成空洞内容。
+- 执行超时：精简脚本，减少复杂逻辑后重试。
 
-**当用户需要 PowerPoint/WPS 可直接打开的 `.pptx` 文件时，走此路径。**
+## 最终回复
 
-### 环境准备
-
-```bash
-npm list -g pptxgenjs || npm install -g pptxgenjs
-```
-
-### 设计系统（暗黑卡片风格）
-
-所有 `.pptx` 生成脚本统一使用以下设计语言：
-
-```javascript
-// 颜色常量
-const BG    = "000000";   // 页面背景
-const CARD  = "1A1A1A";   // 卡片背景
-const CARD2 = "222222";   // 次级卡片
-const WHITE = "FFFFFF";
-const GRAY1 = "AAAAAA";   // 正文辅助
-const GRAY2 = "666666";   // 次要文字
-const GRAY3 = "333333";   // 分隔线
-const BORDER = "2A2A2A";  // 卡片边框
-// BRAND 根据内容自动设置，例如小米: "FF6900"
-
-// 复用 helpers（每个脚本都定义这几个函数）
-const makeShadow = () => ({ type:"outer", blur:8, offset:2, angle:135, color:"000000", opacity:0.25 });
-
-function addCard(slide, x, y, w, h, color=CARD) {
-  slide.addShape(pres.shapes.RECTANGLE, {
-    x, y, w, h,
-    fill: { color },
-    line: { color: BORDER, width: 0.5 },
-    shadow: makeShadow()
-  });
-}
-
-function addAccentBar(slide, x, y, h) {
-  slide.addShape(pres.shapes.RECTANGLE, {
-    x, y, w: 0.06, h,
-    fill: { color: BRAND }, line: { color: BRAND }
-  });
-}
-
-function addSectionLabel(slide, text, y=0.28) {
-  slide.addText(text.toUpperCase(), {
-    x:0.5, y, w:9, h:0.22,
-    fontSize:8, color:BRAND, bold:true, charSpacing:4, margin:0
-  });
-}
-
-function addSlideTitle(slide, zh, en, y=0.55) {
-  slide.addText(zh, { x:0.5, y, w:9, h:0.55, fontSize:28, bold:true, color:WHITE, margin:0 });
-  slide.addText(en, { x:0.5, y:y+0.52, w:9, h:0.22, fontSize:10, color:GRAY2, margin:0 });
-}
-```
-
-### 幻灯片结构模板
-
-每份 pptx 通常包含：
-
-1. **封面**：大标题 + 品牌色 + 右侧核心数据卡片 3 个
-2. **概览/矩阵页**：3 列等宽卡片，每张含大数字 + 说明
-3. **技术/内容页（2×2）**：4 格卡片，每格图标圆圈 + 标题 + 正文
-4. **数据对比页**：左侧表格卡 + 右侧 3 个数字卡
-5. **图表页**：`slide.addChart()` 搭配数字摘要卡
-6. **时间线页**：横向 5 节点时间轴 + 下方 3 个能力卡
-7. **战略/详情页**：左侧英雄卡（大数字）+ 右侧内容卡
-8. **总结页**：居中大标题 + 3 个图标卡
-
-### 关键注意事项（避免踩坑）
-
-```
-❌ 颜色绝对不加 "#" 前缀 → color: "FF6900"  ✅
-❌ shadow 不用 8 位 hex 表示透明度 → 用 opacity 属性  ✅
-❌ 不复用同一个 shadow 对象 → 用 makeShadow() 每次新建  ✅
-❌ 不用 unicode "•" 做列表 → 用 bullet: true  ✅
-```
-
-### 生成 & 输出流程
-
-```bash
-# 1. 写 Node.js 脚本到 /home/agent/ppt-output.js
-# 2. 运行
-node /home/agent/ppt-output.js
-# 3. 复制到输出目录
-cp /home/agent/*.pptx /mnt/user-data/outputs/
-# 4. 视觉 QA（转 PDF → 图片 → 检查）
-python3 /mnt/skills/public/pptx/scripts/office/soffice.py --headless --convert-to pdf output.pptx
-pdftoppm -jpeg -r 150 output.pdf slide
-# 5. present_files 给用户下载
-```
-
-完整 pptxgenjs API 参考见 `/mnt/skills/public/pptx/pptxgenjs.md`。
-
----
-
-## 输出质量标准
-
-✅ 卡片式布局，信息密度高不拥挤  
-✅ 大数字优先，视觉冲击力强  
-✅ 中英双语标题，设计感强  
-✅ 品牌色自动识别  
-✅ .pptx 可在 PowerPoint / WPS 直接打开编辑  
-✅ HTML 版支持动画、响应式  
-
----
-
-## 参考文件
-
-- `references/html-prompt.md` — HTML 可视化完整提示词（Step 3A）
-- `references/svg-prompt.md` — SVG 单页设计稿提示词
-- `references/outline-prompt.md` — 大纲生成提示词（金字塔原理）
+- 简洁说明生成了什么。
+- 如果有输出文件，指出关键 `output_files`。
+- 如果失败，明确失败原因是：
+  依赖缺失、代码错误、超时，还是输入信息不足。

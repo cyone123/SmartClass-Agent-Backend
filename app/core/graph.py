@@ -68,9 +68,10 @@ def intent_router_node(
             [
                 SystemMessage(
                     content=(
-                        "You are an intent analysis and routing node. "
-                        "Please determine whether the user's input is general chat or "
-                        "related to lesson preparation/teaching design, and strictly "
+                        "You are an intent analysis and routing node in an multi-agent workflow whose target user is teachers. "
+                        "The workflow have two ways.One way is to help teacher prepare lessons or generate teaching plan. "
+                        "Another way is normal chat in which user can talk about any things irrelevant with teaching. "
+                        "Please determine the user's intent based on the provided conversations, and strictly "
                         "output a JSON string without any extra content. "
                         "For lesson preparation/teaching design related requests, output "
                         "'teaching_plan'. For other requests, output 'normal_chat'. "
@@ -78,8 +79,7 @@ def intent_router_node(
                         '{"intent": "teaching_plan"}.'
                     )
                 ),
-                state["messages"][-1],
-            ]
+            ] + state["messages"][-4:]
         )
         print(f"[intent_router_node] intent:{decision.intent}")
         if reporter:
@@ -328,8 +328,8 @@ def build_agent_graph(
     agent_builder.add_edge("follow_up_questioner", "interrupt_for_userinput")
     agent_builder.add_edge("interrupt_for_userinput", "metadata_structer_node")
     agent_builder.add_edge("rag_retrieval_node", "teaching_design_planner")
-    agent_builder.add_edge("teaching_design_planner", END)
-    # agent_builder.add_edge("teaching_design_planner", "ppt_generate_node")
-    # agent_builder.add_edge("ppt_generate_node", END)
+    # agent_builder.add_edge("teaching_design_planner", END)
+    agent_builder.add_edge("teaching_design_planner", "ppt_generate_node")
+    agent_builder.add_edge("ppt_generate_node", END)
 
     return agent_builder.compile(checkpointer=checkpointer)

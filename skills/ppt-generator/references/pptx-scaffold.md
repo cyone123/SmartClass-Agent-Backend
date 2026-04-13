@@ -4,29 +4,9 @@
 
 ---
 
-## 快速开始
-
-```bash
-# 检查/安装依赖
-npm list -g pptxgenjs || npm install -g pptxgenjs
-
-# 运行脚本
-node /home/agent/ppt-output.js
-
-# 复制到输出目录
-cp /home/agent/*.pptx /mnt/user-data/outputs/
-
-# 视觉 QA
-python3 /mnt/skills/public/pptx/scripts/office/soffice.py --headless --convert-to pdf output.pptx
-rm -f slide-*.jpg && pdftoppm -jpeg -r 150 output.pdf slide
-ls -1 "$PWD"/slide-*.jpg
-```
-
----
-
 ## scaffold.js — 完整可运行模板
 
-将以下代码保存为 `/home/agent/ppt-output.js`，按注释替换内容：
+将以下代码保存为 `workspace/ppt-output.js`，按注释替换内容：
 
 ```javascript
 const pptxgen = require("pptxgenjs");
@@ -388,9 +368,18 @@ function addIconCircle(slide, icon, x, y, size=0.45) {
 // =============================================
 // 💾 输出文件
 // =============================================
-pres.writeFile({ fileName: "/home/claude/output.pptx" })
-  .then(() => console.log("✅ 生成成功: /home/claude/output.pptx"))
+pres.writeFile({ fileName: "output.pptx" })
+  .then(() => console.log("✅ 生成成功: output.pptx"))
   .catch(e => { console.error("❌ 错误:", e); process.exit(1); });
+```
+
+---
+
+## 快速开始
+
+```bash
+# 运行脚本
+ppt-output.js
 ```
 
 ---
@@ -399,13 +388,13 @@ pres.writeFile({ fileName: "/home/claude/output.pptx" })
 
 | 品牌 | BRAND | BRAND_DIM |
 |-----|-------|-----------|
-| 小米 | `FF6900` | `1A0900` |
-| 华为 | `CF0A2C` | `1A0005` |
-| 特斯拉 | `CC0000` | `1A0000` |
-| 苹果 | `0071E3` | `001A33` |
-| 字节跳动 | `006EFF` | `001533` |
-| 阿里巴巴 | `FF6A00` | `1A0D00` |
-| 腾讯 | `12B7F5` | `001A2A` |
+| 小米（橙色调） | `FF6900` | `1A0900` |
+| 华为（红色调） | `CF0A2C` | `1A0005` |
+| 特斯拉（红色调） | `CC0000` | `1A0000` |
+| 苹果（蓝色调） | `0071E3` | `001A33` |
+| 字节跳动（浅蓝色调） | `006EFF` | `001533` |
+| 阿里巴巴（橙色调） | `FF6A00` | `1A0D00` |
+| 腾讯（蓝色调） | `12B7F5` | `001A2A` |
 | 通用科技蓝 | `00AEEF` | `001A2A` |
 
 ---
