@@ -9,6 +9,9 @@ from langchain_core.runnables import RunnableConfig
 
 ProgressStepKey = Literal[
     "attachment_analysis",
+    "skill_activation",
+    "code_preparation",
+    "code_execution",
     "intent_recognition",
     "metadata_structuring",
     "rag_retrieval",
@@ -18,6 +21,9 @@ ProgressStatus = Literal["pending", "running", "success", "failed"]
 
 STEP_ORDER: tuple[ProgressStepKey, ...] = (
     "attachment_analysis",
+    "skill_activation",
+    "code_preparation",
+    "code_execution",
     "intent_recognition",
     "metadata_structuring",
     "rag_retrieval",
@@ -25,6 +31,9 @@ STEP_ORDER: tuple[ProgressStepKey, ...] = (
 )
 STEP_LABELS: dict[ProgressStepKey, str] = {
     "attachment_analysis": "附件分析",
+    "skill_activation": "Skill 激活",
+    "code_preparation": "代码准备",
+    "code_execution": "代码执行",
     "intent_recognition": "意图识别",
     "metadata_structuring": "结构化元数据",
     "rag_retrieval": "RAG 检索",

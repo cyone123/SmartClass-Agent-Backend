@@ -10,13 +10,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 from pydantic import BaseModel, Field, field_validator
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
+from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 import yaml
 
 from app.config import get_skills_root
+from app.core.progress import emit_progress
 
 SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
+SKILL_ALLOWED_TOOL_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 RESERVED_SKILL_TERMS = ("anthropic", "claude")
 DEFAULT_SCRIPT_TIMEOUT_SECONDS = 30
 MAX_SCRIPT_OUTPUT_CHARS = 12000
@@ -31,6 +35,9 @@ class SkillValidationError(ValueError):
 class SkillMetadata:
     name: str
     description: str
+    compatibility: str | None = None
+    metadata: dict[str, str] | None = None
+    allowed_tools: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -51,6 +58,18 @@ class SkillDefinition:
     @property
     def description(self) -> str:
         return self.metadata.description
+
+    @property
+    def compatibility(self) -> str | None:
+        return self.metadata.compatibility
+
+    @property
+    def metadata_map(self) -> dict[str, str]:
+        return dict(self.metadata.metadata or {})
+
+    @property
+    def allowed_tools(self) -> tuple[str, ...]:
+        return self.metadata.allowed_tools
 
 
 @dataclass(frozen=True)
@@ -145,6 +164,70 @@ def _validate_skill_description(description: object, *, source: Path) -> str:
     return description
 
 
+def _validate_skill_compatibility(compatibility: object, *, source: Path) -> str | None:
+    if compatibility is None:
+        return None
+    if not isinstance(compatibility, str):
+        raise SkillValidationError(
+            f"{source} frontmatter field 'compatibility' must be a string when provided."
+        )
+    normalized = compatibility.strip()
+    if not normalized:
+        return None
+    if len(normalized) > 2048:
+        raise SkillValidationError(
+            f"{source} frontmatter field 'compatibility' exceeds 2048 characters."
+        )
+    return normalized
+
+
+def _validate_skill_metadata_map(value: object, *, source: Path) -> dict[str, str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise SkillValidationError(
+            f"{source} frontmatter field 'metadata' must be a mapping when provided."
+        )
+
+    normalized: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise SkillValidationError(f"{source} metadata keys must be strings.")
+        normalized_key = key.strip()
+        if not normalized_key:
+            raise SkillValidationError(f"{source} metadata keys must not be empty.")
+        normalized[normalized_key] = str(item).strip()
+    return normalized or None
+
+
+def _normalize_allowed_tools(value: object, *, source: Path) -> tuple[str, ...]:
+    if value is None:
+        return ()
+
+    raw_values: list[str]
+    if isinstance(value, str):
+        raw_values = [item.strip() for item in re.split(r"[\n,]+", value) if item.strip()]
+    elif isinstance(value, (list, tuple)):
+        raw_values = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        raise SkillValidationError(
+            f"{source} frontmatter field 'allowed-tools' must be a string or list of strings."
+        )
+
+    seen: set[str] = set()
+    allowed_tools: list[str] = []
+    for item in raw_values:
+        if not SKILL_ALLOWED_TOOL_PATTERN.fullmatch(item):
+            raise SkillValidationError(
+                f"{source} has invalid allowed tool '{item}'."
+            )
+        if item in seen:
+            continue
+        seen.add(item)
+        allowed_tools.append(item)
+    return tuple(allowed_tools)
+
+
 def _iter_relative_files(root_path: Path) -> tuple[str, ...]:
     file_paths: list[str] = []
     for path in sorted(root_path.rglob("*")):
@@ -171,6 +254,18 @@ def _build_skill_definition(skill_dir: Path) -> SkillDefinition:
         name=_validate_skill_name(frontmatter.get("name"), source=skill_file_path),
         description=_validate_skill_description(
             frontmatter.get("description"),
+            source=skill_file_path,
+        ),
+        compatibility=_validate_skill_compatibility(
+            frontmatter.get("compatibility"),
+            source=skill_file_path,
+        ),
+        metadata=_validate_skill_metadata_map(
+            frontmatter.get("metadata"),
+            source=skill_file_path,
+        ),
+        allowed_tools=_normalize_allowed_tools(
+            frontmatter.get("allowed-tools"),
             source=skill_file_path,
         ),
     )
@@ -235,6 +330,20 @@ def _format_file_listing(title: str, files: tuple[str, ...]) -> str:
     lines.extend(f"- {file_path}" for file_path in files)
     return "\n".join(lines)
 
+
+def _format_metadata_listing(metadata: dict[str, str] | None) -> str:
+    if not metadata:
+        return "Metadata: none"
+    lines = ["Metadata:"]
+    lines.extend(f"- {key}: {value}" for key, value in sorted(metadata.items()))
+    return "\n".join(lines)
+
+
+def _format_allowed_tools_listing(allowed_tools: tuple[str, ...]) -> str:
+    if not allowed_tools:
+        return "Allowed tools: none"
+    return "Allowed tools: " + ", ".join(allowed_tools)
+
 def _normalize_script_args(value: object) -> list[str] | None:
     if value is None:
         return None
@@ -288,7 +397,10 @@ class SkillToolset:
         self.registry = registry
 
         @tool
-        def load_skill(skill_name: str) -> str:
+        def load_skill(
+            skill_name: str,
+            runtime: ToolRuntime,
+        ) -> Command | str:
             """Load the full instructions for a skill when the task matches it.
 
             Use this after a request matches a skill description from the system prompt.
@@ -296,16 +408,32 @@ class SkillToolset:
             resource and script files available for further progressive disclosure.
             """
             print(f"==============尝试加载skills:{skill_name}=================")
+            config = runtime.config
+            emit_progress(
+                config,
+                "skill_activation",
+                "running",
+                detail=f"Loading skill {skill_name}",
+            )
             try:
                 canonical_name = self.registry.resolve_skill_name(skill_name)
                 skill = self.registry.get_skill(canonical_name)
                 body = self.registry.load_skill_body(canonical_name)
             except SkillValidationError as exc:
+                emit_progress(
+                    config,
+                    "skill_activation",
+                    "failed",
+                    detail=str(exc),
+                )
                 return str(exc)
             
             sections = [
                 f"Loaded skill: {canonical_name}",
                 f"Description: {skill.description}",
+                f"Compatibility: {skill.compatibility or 'none'}",
+                _format_allowed_tools_listing(skill.allowed_tools),
+                _format_metadata_listing(skill.metadata_map),
                 _format_file_listing("Available references", skill.reference_files),
                 _format_file_listing("Available templates", skill.template_files),
                 _format_file_listing("Available assets", skill.asset_files),
@@ -314,7 +442,33 @@ class SkillToolset:
                 body,
             ]
             print(f"==============加载skills完成:{skill_name}=================")
-            return "\n".join(section for section in sections if section != "")
+            content = "\n".join(section for section in sections if section != "")
+            emit_progress(
+                config,
+                "skill_activation",
+                "success",
+                detail=f"Loaded skill {canonical_name}",
+            )
+
+            if runtime.tool_call_id is None:
+                return content
+
+            current_active_skills = list(runtime.state.get("active_skills", []) or [])
+            if canonical_name not in current_active_skills:
+                current_active_skills.append(canonical_name)
+
+            return Command(
+                update={
+                    "messages": [
+                        ToolMessage(
+                            content=content,
+                            name="load_skill",
+                            tool_call_id=runtime.tool_call_id,
+                        )
+                    ],
+                    "active_skills": current_active_skills,
+                }
+            )
 
         @tool
         def read_skill_resource(skill_name: str, relative_path: str) -> str:
@@ -341,10 +495,11 @@ class SkillToolset:
             script_path: str,
             script_args: list[str] | None = None,
         ) -> str:
-            """Execute a script from the skill's scripts/ directory.
+            """Execute a script from the skill's scripts directory.
 
-            Use this for tasks that need to run scripts of specific skill. Pass optional script
-            arguments with `script_args`, ideally as a JSON array of strings.
+            Use this for tasks that need to run scripts of specific skill. 
+            script_path as a relative path like: 'scripts/one_script.py'
+            Pass optional script arguments with `script_args`, ideally as a JSON array of strings.
             """
             print(f"==============尝试运行脚本skills:{skill_name}=================")
             try:
@@ -415,6 +570,10 @@ class SkillRegistry:
 
     def get_skill(self, skill_name: str) -> SkillDefinition:
         return self._skills[self.resolve_skill_name(skill_name)]
+
+    def skill_allows_tool(self, skill_name: str, tool_name: str) -> bool:
+        skill = self.get_skill(skill_name)
+        return tool_name in skill.allowed_tools
 
     def load_skill_body(self, skill_name: str) -> str:
         skill = self.get_skill(skill_name)
