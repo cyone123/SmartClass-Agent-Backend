@@ -6,8 +6,8 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from app.core.agent import AgentRuntime
 from app.core.progress import ProgressReporter
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import select
@@ -22,6 +22,9 @@ from app.core.rag import RagRuntime
 from app.models.file import AttachmentFile, KnowledgeFile
 from app.models.plan import Plan
 from app.models.session import Session
+
+if TYPE_CHECKING:
+    from app.core.agent import AgentRuntime
 
 FILE_STATUS_UPLOADED = "uploaded"
 FILE_STATUS_INDEXING = "indexing"
@@ -48,7 +51,7 @@ def _guess_mime_type(filename: str, fallback: str | None) -> str:
 def _build_storage_path(plan_id: int, file_id: int, original_name: str) -> tuple[str, Path]:
     # safe_name = _sanitize_filename(original_name)
     stored_name = original_name #f"{file_id}.{safe_name}"
-    storage_path = get_file_storage_root() / "plan_files" / plan_id / stored_name
+    storage_path = get_file_storage_root() / "plan_files" / str(plan_id) / stored_name
     return stored_name, storage_path
 
 

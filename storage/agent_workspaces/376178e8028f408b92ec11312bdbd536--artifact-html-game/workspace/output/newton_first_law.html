@@ -1,0 +1,1116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>牛顿第一定律 - 交互式教学活动</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Microsoft YaHei', 'SimHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #fff;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #f0f0f0;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        
+        .nav-tabs {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .nav-tab {
+            padding: 12px 24px;
+            background: rgba(255,255,255,0.2);
+            border: none;
+            border-radius: 25px;
+            color: #fff;
+            font-size: 1em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .nav-tab:hover, .nav-tab.active {
+            background: #fff;
+            color: #667eea;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        
+        .section {
+            background: #fff;
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none;
+        }
+        
+        .section.active {
+            display: block;
+            animation: fadeIn 0.5s ease;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        h2 {
+            color: #333;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #667eea;
+        }
+        
+        h3 {
+            color: #555;
+            margin: 20px 0 10px;
+        }
+        
+        p {
+            color: #666;
+            line-height: 1.8;
+            margin-bottom: 15px;
+        }
+        
+        /* 实验区域 */
+        .experiment-area {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+            position: relative;
+        }
+        
+        .canvas-container {
+            background: #fff;
+            border-radius: 10px;
+            padding: 10px;
+            margin: 15px 0;
+            border: 2px solid #e0e0e0;
+        }
+        
+        canvas {
+            display: block;
+            margin: 0 auto;
+            border-radius: 5px;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 15px;
+        }
+        
+        .btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 25px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+        }
+        
+        .btn-primary:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+            color: #fff;
+        }
+        
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        
+        .btn-success {
+            background: #28a745;
+            color: #fff;
+        }
+        
+        .btn-success:hover {
+            background: #218838;
+        }
+        
+        /* 知识卡片 */
+        .knowledge-card {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 15px 0;
+            border-left: 5px solid #667eea;
+        }
+        
+        .knowledge-card h4 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .knowledge-card p {
+            color: #555;
+            margin: 0;
+        }
+        
+        /* 对比卡片 */
+        .compare-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        
+        .compare-card {
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+        }
+        
+        .compare-card.wrong {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a5a 100%);
+            color: #fff;
+        }
+        
+        .compare-card.right {
+            background: linear-gradient(135deg, #51cf66 0%, #40c057 100%);
+            color: #fff;
+        }
+        
+        .compare-card h4 {
+            font-size: 1.3em;
+            margin-bottom: 10px;
+        }
+        
+        /* 问答题 */
+        .quiz-container {
+            margin: 20px 0;
+        }
+        
+        .quiz-item {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            margin: 20px 0;
+            border-left: 5px solid #667eea;
+        }
+        
+        .quiz-item h4 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.1em;
+        }
+        
+        .quiz-options {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        .quiz-option {
+            padding: 15px 20px;
+            background: #fff;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .quiz-option:hover {
+            border-color: #667eea;
+            background: #f0f4ff;
+        }
+        
+        .quiz-option.selected {
+            border-color: #667eea;
+            background: #e8ecff;
+        }
+        
+        .quiz-option.correct {
+            border-color: #28a745;
+            background: #d4edda;
+        }
+        
+        .quiz-option.wrong {
+            border-color: #dc3545;
+            background: #f8d7da;
+        }
+        
+        .feedback {
+            margin-top: 15px;
+            padding: 15px;
+            border-radius: 10px;
+            display: none;
+        }
+        
+        .feedback.show {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+        
+        .feedback.correct {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .feedback.wrong {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        /* 滑块 */
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin: 15px 0;
+            padding: 15px;
+            background: #fff;
+            border-radius: 10px;
+        }
+        
+        .slider-container label {
+            min-width: 100px;
+            color: #555;
+        }
+        
+        input[type="range"] {
+            flex: 1;
+            height: 8px;
+            border-radius: 4px;
+            background: #ddd;
+            outline: none;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #667eea;
+            cursor: pointer;
+        }
+        
+        .slider-value {
+            min-width: 50px;
+            text-align: center;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        /* 应用场景 */
+        .scenario-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        
+        .scenario-card {
+            background: #fff;
+            border-radius: 15px;
+            padding: 20px;
+            border: 2px solid #e0e0e0;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .scenario-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            border-color: #667eea;
+        }
+        
+        .scenario-card h4 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .scenario-card p {
+            color: #666;
+            font-size: 0.95em;
+        }
+        
+        .scenario-icon {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .tag {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 15px;
+            font-size: 0.8em;
+            margin-top: 10px;
+        }
+        
+        .tag-useful {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .tag-harmful {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        /* 进度条 */
+        .progress-bar {
+            height: 10px;
+            background: #e0e0e0;
+            border-radius: 5px;
+            margin: 20px 0;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 5px;
+            transition: width 0.5s ease;
+        }
+        
+        /* 动画说明 */
+        .animation-info {
+            background: #e8ecff;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+            text-align: center;
+            color: #555;
+        }
+        
+        /* 响应式 */
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 1.8em;
+            }
+            
+            .section {
+                padding: 20px;
+            }
+            
+            .nav-tab {
+                padding: 10px 15px;
+                font-size: 0.9em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔬 牛顿第一定律</h1>
+        <p class="subtitle">交互式教学活动 | 初三物理 | 40分钟课程</p>
+        
+        <div class="nav-tabs">
+            <button class="nav-tab active" onclick="showSection('history')">历史探索</button>
+            <button class="nav-tab" onclick="showSection('galileo')">理想实验</button>
+            <button class="nav-tab" onclick="showSection('inertia')">惯性实验</button>
+            <button class="nav-tab" onclick="showSection('quiz')">概念辨析</button>
+            <button class="nav-tab" onclick="showSection('apply')">实际应用</button>
+        </div>
+        
+        <!-- 历史探索 -->
+        <div id="history" class="section active">
+            <h2>📜 历史的足迹：运动的奥秘</h2>
+            
+            <div class="knowledge-card">
+                <h4>思考题</h4>
+                <p>用力推桌子，桌子运动；停止用力，桌子停止。由此看来，必须有力作用在物体上，物体才能运动。这个观点对吗？</p>
+            </div>
+            
+            <div class="compare-cards">
+                <div class="compare-card wrong">
+                    <h4>❌ 亚里士多德的观点</h4>
+                    <p>力是维持运动的原因</p>
+                    <p style="margin-top:10px;font-size:0.9em;">"必须有力作用在物体上，物体才能运动"</p>
+                    <p style="margin-top:10px;font-size:0.9em;color:#ffcccc;">这个观点是错误的！</p>
+                </div>
+                <div class="compare-card right">
+                    <h4>✅ 伽利略的观点</h4>
+                    <p>力是改变运动状态的原因</p>
+                    <p style="margin-top:10px;font-size:0.9em;">"在理想情况下，物体将永远运动下去"</p>
+                    <p style="margin-top:10px;font-size:0.9em;color:#ccffcc;">这个观点是正确的！</p>
+                </div>
+            </div>
+            
+            <div class="knowledge-card">
+                <h4>💡 关键理解</h4>
+                <p><strong>运动不需要力来维持！</strong>如果物体不受任何外力作用，它将保持原来的运动状态不变。</p>
+                <p>力的作用是<strong>改变</strong>物体的运动状态，而不是<strong>维持</strong>物体的运动。</p>
+            </div>
+        </div>
+        
+        <!-- 理想实验 -->
+        <div id="galileo" class="section">
+            <h2>🧪 伽利略的理想实验</h2>
+            
+            <p>观察小球在不同阻力条件下的运动，理解"理想实验"的科学思维方法。</p>
+            
+            <div class="experiment-area">
+                <div class="canvas-container">
+                    <canvas id="galileoCanvas" width="700" height="350"></canvas>
+                </div>
+                
+                <div class="slider-container">
+                    <label>阻力大小：</label>
+                    <input type="range" id="frictionSlider" min="0" max="100" value="50">
+                    <span class="slider-value" id="frictionValue">中等</span>
+                </div>
+                
+                <div class="controls">
+                    <button class="btn btn-primary" onclick="startGalileo()">▶ 开始实验</button>
+                    <button class="btn btn-secondary" onclick="resetGalileo()">↺ 重置</button>
+                </div>
+                
+                <div class="animation-info" id="galileoInfo">
+                    调节阻力大小，观察小球运动情况，点击"开始实验"
+                </div>
+            </div>
+            
+            <div class="knowledge-card">
+                <h4>📝 实验结论</h4>
+                <p><strong>阻力越大</strong>：小球上升高度越低，很快停止。</p>
+                <p><strong>阻力越小</strong>：小球越接近原来的高度。</p>
+                <p><strong>理想情况（无阻力）</strong>：小球将一直运动下去，永远无法停止！</p>
+            </div>
+        </div>
+        
+        <!-- 惯性实验 -->
+        <div id="inertia" class="section">
+            <h2>🎯 惯性现象实验</h2>
+            
+            <div class="knowledge-card">
+                <h4>惯性定义</h4>
+                <p>物体保持运动状态不变的性质叫做<strong>惯性</strong>。牛顿第一定律又叫<strong>惯性定律</strong>。</p>
+            </div>
+            
+            <div class="experiment-area">
+                <h3>实验一：静止物体的惯性</h3>
+                <div class="canvas-container">
+                    <canvas id="inertiaCanvas1" width="600" height="250"></canvas>
+                </div>
+                <div class="controls">
+                    <button class="btn btn-primary" onclick="pullPaper()">📤 抽出纸条</button>
+                    <button class="btn btn-secondary" onclick="resetPaper()">↺ 重置</button>
+                </div>
+                <div class="animation-info" id="inertiaInfo1">
+                    点击"抽出纸条"，观察木块的状态
+                </div>
+            </div>
+            
+            <div class="experiment-area">
+                <h3>实验二：运动物体的惯性</h3>
+                <div class="canvas-container">
+                    <canvas id="inertiaCanvas2" width="600" height="250"></canvas>
+                </div>
+                <div class="controls">
+                    <button class="btn btn-primary" onclick="startCart()">🚗 启动小车</button>
+                    <button class="btn btn-secondary" onclick="resetCart()">↺ 重置</button>
+                </div>
+                <div class="animation-info" id="inertiaInfo2">
+                    点击"启动小车"，观察木块的运动
+                </div>
+            </div>
+            
+            <div class="knowledge-card">
+                <h4>📝 解释惯性现象的"三步法"</h4>
+                <p><strong>1. 定对象</strong>：明确哪个物体具有惯性</p>
+                <p><strong>2. 看原状</strong>：分析物体原来的运动状态（静止或运动）</p>
+                <p><strong>3. 析变化</strong>：分析受力后发生了什么改变，得出结果</p>
+            </div>
+        </div>
+        
+        <!-- 概念辨析 -->
+        <div id="quiz" class="section">
+            <h2>❓ 惯性概念辨析</h2>
+            
+            <div class="progress-bar">
+                <div class="progress-fill" id="quizProgress" style="width: 0%"></div>
+            </div>
+            <p style="text-align:center;color:#666;">完成进度：<span id="progressText">0/4</span></p>
+            
+            <div class="quiz-container">
+                <div class="quiz-item" id="quiz1">
+                    <h4>问题1：关于惯性的说法，下列正确的是？</h4>
+                    <div class="quiz-options">
+                        <div class="quiz-option" onclick="checkAnswer(1, 'A', this)">A. 物体只有运动时才具有惯性</div>
+                        <div class="quiz-option" onclick="checkAnswer(1, 'B', this)">B. 物体只有静止时才具有惯性</div>
+                        <div class="quiz-option" onclick="checkAnswer(1, 'C', this)">C. 一切物体在任何情况下都具有惯性</div>
+                        <div class="quiz-option" onclick="checkAnswer(1, 'D', this)">D. 物体受力时才具有惯性</div>
+                    </div>
+                    <div class="feedback" id="feedback1"></div>
+                </div>
+                
+                <div class="quiz-item" id="quiz2">
+                    <h4>问题2：关于惯性，下列说法正确的是？</h4>
+                    <div class="quiz-options">
+                        <div class="quiz-option" onclick="checkAnswer(2, 'A', this)">A. 汽车速度越大，惯性越大</div>
+                        <div class="quiz-option" onclick="checkAnswer(2, 'B', this)">B. 汽车质量越大，惯性越大</div>
+                        <div class="quiz-option" onclick="checkAnswer(2, 'C', this)">C. 汽车静止时没有惯性</div>
+                        <div class="quiz-option" onclick="checkAnswer(2, 'D', this)">D. 汽车刹车时惯性消失</div>
+                    </div>
+                    <div class="feedback" id="feedback2"></div>
+                </div>
+                
+                <div class="quiz-item" id="quiz3">
+                    <h4>问题3：下列说法中正确的是？</h4>
+                    <div class="quiz-options">
+                        <div class="quiz-option" onclick="checkAnswer(3, 'A', this)">A. 物体受到惯性力的作用</div>
+                        <div class="quiz-option" onclick="checkAnswer(3, 'B', this)">B. 由于惯性的冲力使物体继续运动</div>
+                        <div class="quiz-option" onclick="checkAnswer(3, 'C', this)">C. 惯性是物体的一种性质，不是力</div>
+                        <div class="quiz-option" onclick="checkAnswer(3, 'D', this)">D. 速度越大，惯性力越大</div>
+                    </div>
+                    <div class="feedback" id="feedback3"></div>
+                </div>
+                
+                <div class="quiz-item" id="quiz4">
+                    <h4>问题4：为什么马路严禁超载？</h4>
+                    <div class="quiz-options">
+                        <div class="quiz-option" onclick="checkAnswer(4, 'A', this)">A. 超载使汽车速度变快</div>
+                        <div class="quiz-option" onclick="checkAnswer(4, 'B', this)">B. 超载使汽车惯性变大，刹车困难</div>
+                        <div class="quiz-option" onclick="checkAnswer(4, 'C', this)">C. 超载使汽车惯性变小</div>
+                        <div class="quiz-option" onclick="checkAnswer(4, 'D', this)">D. 超载与惯性无关</div>
+                    </div>
+                    <div class="feedback" id="feedback4"></div>
+                </div>
+            </div>
+            
+            <div class="knowledge-card" id="summaryCard" style="display:none;">
+                <h4>🎉 总结</h4>
+                <p><strong>惯性是物体的固有属性</strong>，不是力！</p>
+                <p>惯性大小<strong>只与质量有关</strong>，质量越大，惯性越大。</p>
+                <p><strong>一切物体在任何情况下都有惯性</strong>，与运动状态、速度大小、受力情况都无关！</p>
+            </div>
+        </div>
+        
+        <!-- 实际应用 -->
+        <div id="apply" class="section">
+            <h2>🌟 惯性在生活中的应用</h2>
+            
+            <p>惯性无处不在，我们既利用它，也要防止它带来的危害。点击卡片了解详情：</p>
+            
+            <div class="scenario-grid">
+                <div class="scenario-card" onclick="showDetail('longjump')">
+                    <div class="scenario-icon">🏃</div>
+                    <h4>跳远助跑</h4>
+                    <p>运动员为什么要先助跑？</p>
+                    <span class="tag tag-useful">利用惯性</span>
+                </div>
+                
+                <div class="scenario-card" onclick="showDetail('hammer')">
+                    <div class="scenario-icon">🔨</div>
+                    <h4>紧固锤头</h4>
+                    <p>锤头松了，怎么修？</p>
+                    <span class="tag tag-useful">利用惯性</span>
+                </div>
+                
+                <div class="scenario-card" onclick="showDetail('seatbelt')">
+                    <div class="scenario-icon">🚗</div>
+                    <h4>系安全带</h4>
+                    <p>为什么要系安全带？</p>
+                    <span class="tag tag-harmful">防止惯性危害</span>
+                </div>
+                
+                <div class="scenario-card" onclick="showDetail('dust')">
+                    <div class="scenario-icon">👕</div>
+                    <h4>拍打除尘</h4>
+                    <p>为什么拍打能除尘？</p>
+                    <span class="tag tag-useful">利用惯性</span>
+                </div>
+                
+                <div class="scenario-card" onclick="showDetail('distance')">
+                    <div class="scenario-icon">📏</div>
+                    <h4>保持车距</h4>
+                    <p>为什么要保持安全车距？</p>
+                    <span class="tag tag-harmful">防止惯性危害</span>
+                </div>
+                
+                <div class="scenario-card" onclick="showDetail('overflow')">
+                    <div class="scenario-icon">☕</div>
+                    <h4>汽车刹车时水溢出</h4>
+                    <p>水向哪个方向洒出？</p>
+                    <span class="tag tag-harmful">惯性现象</span>
+                </div>
+            </div>
+            
+            <div class="knowledge-card" id="detailCard" style="display:none;">
+                <h4 id="detailTitle">详细解释</h4>
+                <p id="detailContent"></p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // 导航切换
+        function showSection(id) {
+            document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+            event.target.classList.add('active');
+            
+            // 重置画布
+            if (id === 'galileo') {
+                initGalileo();
+            } else if (id === 'inertia') {
+                initInertia();
+            }
+        }
+        
+        // ========== 伽利略实验 ==========
+        let galileoCtx, ballX, ballY, ballVx, ballVy, friction, isRunning;
+        let animationId;
+        
+        function initGalileo() {
+            const canvas = document.getElementById('galileoCanvas');
+            galileoCtx = canvas.getContext('2d');
+            friction = parseInt(document.getElementById('frictionSlider').value);
+            isRunning = false;
+            drawGalileoScene(80, 250);
+        }
+        
+        function drawGalileoScene(ballX = 80, ballY = 250) {
+            const ctx = galileoCtx;
+            ctx.clearRect(0, 0, 700, 350);
+            
+            // 左斜面
+            ctx.beginPath();
+            ctx.moveTo(50, 300);
+            ctx.lineTo(150, 100);
+            ctx.lineTo(170, 100);
+            ctx.lineTo(70, 300);
+            ctx.closePath();
+            ctx.fillStyle = '#8B4513';
+            ctx.fill();
+            ctx.strokeStyle = '#5D3A1A';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            // 右斜面
+            ctx.beginPath();
+            ctx.moveTo(350, 300);
+            ctx.lineTo(550, 100);
+            ctx.lineTo(570, 100);
+            ctx.lineTo(370, 300);
+            ctx.closePath();
+            ctx.fillStyle = '#8B4513';
+            ctx.fill();
+            ctx.stroke();
+            
+            // 平台
+            ctx.fillStyle = '#A0522D';
+            ctx.fillRect(150, 95, 420, 10);
+            
+            // 阻力指示
+            const frictionLevel = friction / 100;
+            ctx.fillStyle = `rgba(255, 100, 100, ${frictionLevel * 0.3})`;
+            ctx.fillRect(150, 105, 420, 5);
+            
+            // 小球
+            ctx.beginPath();
+            ctx.arc(ballX, ballY, 15, 0, Math.PI * 2);
+            ctx.fillStyle = '#FF6B6B';
+            ctx.fill();
+            ctx.strokeStyle = '#CC5555';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            // 标注
+            ctx.fillStyle = '#333';
+            ctx.font = '14px Microsoft YaHei';
+            ctx.fillText('起点', 60, 320);
+            ctx.fillText('理想终点', 500, 320);
+            
+            // 阻力说明
+            ctx.fillStyle = '#666';
+            ctx.font = '12px Microsoft YaHei';
+            ctx.fillText('红色区域表示阻力大小', 250, 340);
+        }
+        
+        function startGalileo() {
+            if (isRunning) return;
+            isRunning = true;
+            friction = parseInt(document.getElementById('frictionSlider').value) / 100;
+            
+            ballX = 80;
+            ballY = 115;
+            ballVx = 0;
+            ballVy = 0;
+            
+            const frictionText = friction < 0.2 ? '较小' : (friction < 0.5 ? '中等' : '较大');
+            document.getElementById('galileoInfo').innerHTML = `阻力${frictionText}，观察小球运动...`;
+            
+            animateGalileo();
+        }
+        
+        function animateGalileo() {
+            const gravity = 0.3;
+            const bounce = 0.6;
+            
+            // 下坡阶段
+            if (ballX < 150 && ballY < 250) {
+                ballVx += 0.5;
+                ballVy += gravity;
+                ballX += ballVx;
+                ballY += ballVy;
+            }
+            // 平台阶段
+            else if (ballX >= 150 && ballX <= 520 && ballY >= 100) {
+                ballY = 100;
+                ballVy = 0;
+                ballX += ballVx;
+                ballVx *= (1 - friction * 0.05); // 阻力减速
+            }
+            // 上坡阶段
+            else if (ballX > 520 && ballY > 100) {
+                ballVy -= gravity * 0.5;
+                ballVx *= 0.98;
+                ballX += ballVx;
+                ballY -= ballVy;
+                
+                if (ballY < 100) ballY = 100;
+            }
+            // 停止或反弹
+            else {
+                if (Math.abs(ballVx) < 0.1 && ballY >= 95) {
+                    isRunning = false;
+                    const reachHeight = Math.max(100, 250 - (ballY - 100));
+                    const maxHeight = 250 * (1 - friction);
+                    document.getElementById('galileoInfo').innerHTML = 
+                        `实验完成！小球最高到达高度约 ${Math.round(150 * (1-friction))} 单位。` +
+                        `<br>阻力越小，小球上升越高！`;
+                    return;
+                }
+                ballVy *= -bounce;
+                ballY += ballVy;
+            }
+            
+            drawGalileoScene(ballX, ballY);
+            animationId = requestAnimationFrame(animateGalileo);
+        }
+        
+        function resetGalileo() {
+            isRunning = false;
+            if (animationId) cancelAnimationFrame(animationId);
+            initGalileo();
+            document.getElementById('galileoInfo').innerHTML = '调节阻力大小，观察小球运动情况，点击"开始实验"';
+        }
+        
+        document.getElementById('frictionSlider').addEventListener('input', function() {
+            const val = parseInt(this.value);
+            document.getElementById('frictionValue').textContent = 
+                val < 20 ? '很小' : (val < 50 ? '较小' : (val < 80 ? '中等' : '较大'));
+            friction = val / 100;
+            drawGalileoScene(80, 250);
+        });
+        
+        // ========== 惯性实验一：抽纸条 ==========
+        let inertiaCtx1, paperX, blockMoving;
+        
+        function initInertia() {
+            const canvas1 = document.getElementById('inertiaCanvas1');
+            inertiaCtx1 = canvas1.getContext('2d');
+            drawPaperScene(200);
+            
+            const canvas2 = document.getElementById('inertiaCanvas2');
+            inertiaCtx2 = canvas2.getContext('2d');
+            drawCartScene(50, 0);
+        }
+        
+        function drawPaperScene(paperX) {
+            const ctx = inertiaCtx1;
+            ctx.clearRect(0, 0, 600, 250);
+            
+            // 桌面
+            ctx.fillStyle = '#DEB887';
+            ctx.fillRect(0, 200, 600, 50);
+            
+            // 纸条
+            ctx.fillStyle = '#87CEEB';
+            ctx.fillRect(paperX, 170, 200, 20);
+            ctx.fillStyle = '#5CACEE';
+            ctx.font = '12px Microsoft YaHei';
+            ctx.fillText('纸条', paperX + 85, 185);
+            
+            // 木块
+            ctx.fillStyle = '#CD853F';
+            ctx.fillRect(paperX + 150, 130, 50, 40);
+            ctx.fillStyle = '#8B4513';
+            ctx.font = '12px Microsoft YaHei';
+            ctx.fillText('木块', paperX + 157, 155);
+            
+            // 手
+            ctx.fillStyle = '#FFDAB9';
+            ctx.beginPath();
+            ctx.arc(paperX + 10, 180, 20, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#333';
+            ctx.font = '14px Microsoft YaHei';
+            ctx.fillText('← 快速抽出', paperX + 35, 225);
+        }
+        
+        let paperAnimationId;
+        function pullPaper() {
+            if (paperX <= -100) return;
+            paperX -= 15;
+            drawPaperScene(paperX);
+            
+            if (paperX > -100) {
+                paperAnimationId = requestAnimationFrame(pullPaper);
+            } else {
+                document.getElementById('inertiaInfo1').innerHTML = 
+                    '✅ 木块保持静止！<br><strong>解释</strong>：木块原来是静止的，纸条被快速抽出时，由于惯性，木块保持原来的静止状态，所以几乎不动。';
+            }
+        }
+        
+        function resetPaper() {
+            if (paperAnimationId) cancelAnimationFrame(paperAnimationId);
+            paperX = 200;
+            drawPaperScene(paperX);
+            document.getElementById('inertiaInfo1').innerHTML = '点击"抽出纸条"，观察木块的状态';
+        }
+        
+        // ========== 惯性实验二：小车木块 ==========
+        let inertiaCtx2, cartX, blockOffset, cartVx, cartState;
+        
+        function drawCartScene(cartX, blockOffset) {
+            const ctx = inertiaCtx2;
+            ctx.clearRect(0, 0, 600, 250);
+            
+            // 地面
+            ctx.fillStyle = '#808080';
+            ctx.fillRect(0, 200, 600, 50);
+            
+            // 障碍物
+            ctx.fillStyle = '#8B0000';
+            ctx.fillRect(450, 170, 20, 30);
+            ctx.fillStyle = '#fff';
+            ctx.font = '10px Microsoft YaHei';
+            ctx.fillText('障碍', 450, 165);
+            
+            // 小车
+            ctx.fillStyle = '#4169E1';
+            ctx.fillRect(cartX, 160, 80, 30);
+            // 轮子
+            ctx.fillStyle = '#333';
+            ctx.beginPath();
+            ctx.arc(cartX + 20, 195, 10, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(cartX + 60, 195, 10, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#fff';
+            ctx.font = '12px Microsoft YaHei';
+            ctx.fillText('小车', cartX + 25, 180);
+            
+            // 木块
+            ctx.save();
+            ctx.translate(cartX + 50 + blockOffset, 120);
+            ctx.fillStyle = '#FF6347';
+            ctx.fillRect(-25, 0, 50, 40);
+            ctx.fillStyle = '#fff';
+            ctx.font = '12px Microsoft YaHei';
+            ctx.fillText('木块', -15, 25);
+            ctx.restore();
+            
+            // 运动方向
+            if (cartState === 'moving') {
+                ctx.fillStyle = '#666';
+                ctx.font = '14px Microsoft YaHei';
+                ctx.fillText('运动方向 →', cartX - 10, 230);
+            }
+        }
+        
+        let cartAnimationId;
+        function startCart() {
+            cartX = 50;
+            blockOffset = 0;
+            cartVx = 4;
+            cartState = 'moving';
+            
+            document.getElementById('inertiaInfo2').innerHTML = '小车正在运动...';
+            animateCart();
+        }
+        
+        function animateCart() {
+            cartX += cartVx;
+            
+            // 撞击障碍物
+            if (cartX >= 370 && cartState === 'moving') {
+                cartState = 'stopped';
+                cartVx = 0;
+                // 木块因惯性向前倾
+                blockOffset += 5;
+                if (blockOffset < 50) {
+                    document.getElementById('inertiaInfo2').innerHTML = 
+                        '💥 小车突然停止！<br><strong>解释</strong>：木块原来随小车一起运动，小车突然停止时，木块下部受摩擦力停止，但上部由于惯性继续向前运动，所以木块向前倾倒！';
+                }
+            }
+            
+            // 木块继续向前
+            if (cartState === 'stopped' && blockOffset < 60) {
+                blockOffset += 3;
+            }
+            
+            drawCartScene(cartX, blockOffset);
+            
+            if (cartX < 370 || (cartState === 'stopped' && blockOffset < 60)) {
+                cartAnimationId = requestAnimationFrame(animateCart);
+            }
+        }
+        
+        function resetCart() {
+            if (cartAnimationId) cancelAnimationFrame(cartAnimationId);
+            cartX = 50;
+            blockOffset = 0;
+            cartState = 'ready';
+            drawCartScene(cartX, blockOffset);
+            document.getElementById('inertiaInfo2').innerHTML = '点击"启动小车"，观察木块的运动';
+        }
+        
+        // ========== 问答题 ==========
+        const answers = {
+            1: 'C',
+            2: 'B',
+            3: 'C',
+            4: 'B'
+        };
+        
+        const explanations = {
+            1: '正确！<strong>一切物体在任何情况下都具有惯性</strong>，无论是运动还是静止，无论是受力还是不受力。',
+            2: '正确！<strong>惯性大小只与质量有关</strong>，质量越大，惯性越大。与速度大小、运动状态无关。',
+            3: '正确！<strong>惯性是物体的一种属性，不是力</strong>！不能说"受到惯性的作用"或"惯性力"。',
+            4: '正确！<strong>超载使汽车质量增大，惯性增大</strong>，运动状态难以改变，刹车距离变长，容易发生危险。'
+        };
+        
+        let correctCount = 0;
+        let answeredQuestions = new Set();
+        
+        function checkAnswer(questionNum, selected, element) {
+            if (answeredQuestions.has(questionNum)) return;
+            
+            const options = element.parentElement.querySelectorAll('.quiz-option');
+            const correctAnswer = answers[questionNum];
+            
+            options.forEach(opt => {
+                const optLetter = opt.textContent.charAt(0);
+                if (optLetter === correctAnswer) {
+                    opt.classList.add('correct');
+                } else if (opt === element && optLetter !== correctAnswer) {
+                    opt.classList.add('wrong');
+                }
+                opt.style.pointerEvents = 'none';
+            });
+            
+            const feedback = document.getElementById(`feedback${questionNum}`);
+            feedback.classList.add('show');
+            
+            if (selected === correctAnswer) {
+                feedback.classList.add('correct');
+                feedback.innerHTML = '✅ ' + explanations[questionNum];
+                correctCount++;
+            } else {
+                feedback.classList.add('wrong');
+                feedback.innerHTML = '❌ 答案是 ' + correctAnswer + '。' + explanations[questionNum];
+            }
+            
+            answeredQuestions.add(questionNum);
+            updateProgress();
+        }
+        
+        function updateProgress() {
+            const progress = (answeredQuestions.size / 4) * 100;
+            document.getElementById('quizProgress').style.width = progress + '%';
+            document.getElementById('progressText').textContent = `${answeredQuestions.size}/4`;
+            
+            if (answeredQuestions.size === 4) {
+                document.getElementById('summaryCard').style.display = 'block';
+                document.getElementById('summaryCard').innerHTML = 
+                    `<h4>🎉 完成！答对 ${correctCount}/4 题</h4>
+                    <p><strong>惯性是物体的固有属性</strong>，不是力！</p>
+                    <p>惯性大小<strong>只与质量有关</strong>，质量越大，惯性越大。</p>
+                    <p><strong>一切物体在任何情况下都有惯性</strong>，与运动状态、速度大小、受力情况都无关！</p>`;
+            }
+        }
+        
+        // ========== 应用场景 ==========
+        const details = {
+            longjump: {
+                title: '🏃 跳远助跑',
+                content: '运动员先助跑获得较大的速度，起跳后，由于惯性，身体会保持原来的运动状态继续向前运动，从而跳得更远。<br><br><strong>原理</strong>：利用运动物体的惯性。<br><strong>三步法分析</strong>：<br>1. 定对象：运动员身体<br>2. 看原状：向前运动<br>3. 析变化：起跳后，身体由于惯性继续向前'
+            },
+            hammer: {
+                title: '🔨 紧固锤头',
+                content: '锤头松了，把锤柄末端在硬地上撞击几下，锤柄停止运动，但锤头由于惯性继续向下运动，就紧紧套在锤柄上了。<br><br><strong>原理</strong>：利用运动物体的惯性。<br><strong>三步法分析</strong>：<br>1. 定对象：锤头<br>2. 看原状：向下运动<br>3. 析变化：锤柄停止，锤头因惯性继续向下，套紧'
+            },
+            seatbelt: {
+                title: '🚗 系安全带',
+                content: '汽车急刹车时，乘客的身体由于惯性会继续向前运动，容易撞到前方座椅或挡风玻璃，造成伤害。安全带可以防止身体前冲。<br><br><strong>原理</strong>：防止惯性造成的危害。<br><strong>三步法分析</strong>：<br>1. 定对象：乘客身体<br>2. 看原状：向前运动<br>3. 析变化：车突然停止，身体因惯性继续向前，安全带阻止前冲'
+            },
+            dust: {
+                title: '👕 拍打除尘',
+                content: '用力拍打衣服时，衣服突然运动，但灰尘由于惯性保持静止，与衣服分离，灰尘就掉下来了。<br><br><strong>原理</strong>：利用静止物体的惯性。<br><strong>三步法分析</strong>：<br>1. 定对象：灰尘<br>2. 看原状：静止<br>3. 析变化：衣服突然移动，灰尘因惯性保持静止，与衣服分离'
+            },
+            distance: {
+                title: '📏 保持车距',
+                content: '汽车刹车时，由于惯性，汽车会继续向前运动一段距离才能停下来。如果车距太近，容易发生追尾事故。<br><br><strong>原理</strong>：防止惯性造成的危害。<br><strong>三步法分析</strong>：<br>1. 定对象：汽车<br>2. 看原状：向前高速运动<br>3. 析变化：刹车后，汽车因惯性继续向前，需要一段距离才能停下'
+            },
+            overflow: {
+                title: '☕ 汽车刹车时水溢出',
+                content: '汽车刹车时，杯子里的水会向前洒出。这是因为水原来是随车一起向前运动的，车突然减速时，水由于惯性继续向前运动。<br><br><strong>原理</strong>：惯性现象。<br><strong>三步法分析</strong>：<br>1. 定对象：杯子里的水<br>2. 看原状：向前运动<br>3. 析变化：车减速，水因惯性继续向前，所以向前洒出<br><br><strong>思考</strong>：汽车启动时，水会向哪个方向洒出？'
+            }
+        };
+        
+        function showDetail(key) {
+            const card = document.getElementById('detailCard');
+            card.style.display = 'block';
+            document.getElementById('detailTitle').textContent = details[key].title;
+            document.getElementById('detailContent').innerHTML = details[key].content;
+            card.scrollIntoView({ behavior: 'smooth' });
+        }
+        
+        // 初始化
+        window.onload = function() {
+            initGalileo();
+            initInertia();
+        };
+    </script>
+</body>
+</html>

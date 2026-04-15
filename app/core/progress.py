@@ -16,6 +16,9 @@ ProgressStepKey = Literal[
     "metadata_structuring",
     "rag_retrieval",
     "teaching_design",
+    "ppt_generation",
+    "lesson_plan_generation",
+    "game_generation",
 ]
 ProgressStatus = Literal["pending", "running", "success", "failed"]
 
@@ -28,16 +31,22 @@ STEP_ORDER: tuple[ProgressStepKey, ...] = (
     "metadata_structuring",
     "rag_retrieval",
     "teaching_design",
+    "ppt_generation",
+    "lesson_plan_generation",
+    "game_generation",
 )
 STEP_LABELS: dict[ProgressStepKey, str] = {
     "attachment_analysis": "附件分析",
-    "skill_activation": "Skill 激活",
+    "skill_activation": "Skill 加载",
     "code_preparation": "代码准备",
     "code_execution": "代码执行",
     "intent_recognition": "意图识别",
-    "metadata_structuring": "结构化元数据",
+    "metadata_structuring": "结构化要素提取",
     "rag_retrieval": "RAG 检索",
     "teaching_design": "生成教学设计",
+    "ppt_generation": "生成课件",
+    "lesson_plan_generation": "生成教案",
+    "game_generation": "生成互动内容",
 }
 
 
@@ -154,12 +163,10 @@ def get_registered_progress_reporter(run_id: str | None) -> ProgressReporter | N
 
 def get_progress_reporter(config: RunnableConfig | None) -> ProgressReporter | None:
     if not isinstance(config, Mapping):
-        print("[progress] missing config mapping")
         return None
 
     configurable = config.get("configurable")
     if not isinstance(configurable, Mapping):
-        print("[progress] missing configurable mapping")
         return None
 
     reporter = configurable.get("progress_reporter")
@@ -168,12 +175,7 @@ def get_progress_reporter(config: RunnableConfig | None) -> ProgressReporter | N
 
     run_id = configurable.get("run_id")
     if isinstance(run_id, str):
-        registered = get_registered_progress_reporter(run_id)
-        if registered is None:
-            print(f"[progress] reporter not found for run_id={run_id}")
-        return registered
-
-    print("[progress] run_id missing from config")
+        return get_registered_progress_reporter(run_id)
 
     return None
 
@@ -187,10 +189,6 @@ def emit_progress(
 ) -> ProgressReporter | None:
     reporter = get_progress_reporter(config)
     if reporter is None:
-        print(
-            f"[progress] skip emit step={step_key} status={status} "
-            f"detail={detail!r}"
-        )
         return None
 
     reporter.emit(step_key, status, detail=detail)

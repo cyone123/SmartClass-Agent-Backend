@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import locale
 import os
 import re
 import shutil
@@ -83,6 +84,30 @@ def _truncate_text(
     if truncated:
         result = f"{result}\n...[truncated]"
     return result, truncated
+
+
+def _decode_process_output(raw: bytes | str | None) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw
+
+    tried: set[str] = set()
+    for encoding in (
+        "utf-8",
+        locale.getpreferredencoding(False),
+        "gbk",
+    ):
+        normalized = (encoding or "").strip()
+        if not normalized or normalized in tried:
+            continue
+        tried.add(normalized)
+        try:
+            return raw.decode(normalized)
+        except UnicodeDecodeError:
+            continue
+
+    return raw.decode("utf-8", errors="replace")
 
 
 def _snapshot_files(root: Path) -> dict[str, float]:
@@ -245,18 +270,18 @@ class LocalSubprocessExecutionBackend(ExecutionBackend):
                 command,
                 cwd=paths.workspace_root,
                 capture_output=True,
-                text=True,
+                text=False,
                 timeout=self.timeout_seconds,
                 check=False,
                 env=env,
             )
             stdout, _ = _truncate_text(
-                completed.stdout,
+                _decode_process_output(completed.stdout),
                 max_chars=MAX_EXECUTION_OUTPUT_CHARS,
                 max_lines=MAX_EXECUTION_OUTPUT_LINES,
             )
             stderr, _ = _truncate_text(
-                completed.stderr,
+                _decode_process_output(completed.stderr),
                 max_chars=MAX_EXECUTION_OUTPUT_CHARS,
                 max_lines=MAX_EXECUTION_OUTPUT_LINES,
             )
@@ -264,12 +289,12 @@ class LocalSubprocessExecutionBackend(ExecutionBackend):
             exit_code = completed.returncode
         except subprocess.TimeoutExpired as exc:
             stdout, _ = _truncate_text(
-                exc.stdout or "",
+                _decode_process_output(exc.stdout),
                 max_chars=MAX_EXECUTION_OUTPUT_CHARS,
                 max_lines=MAX_EXECUTION_OUTPUT_LINES,
             )
             stderr, _ = _truncate_text(
-                exc.stderr or "",
+                _decode_process_output(exc.stderr),
                 max_chars=MAX_EXECUTION_OUTPUT_CHARS,
                 max_lines=MAX_EXECUTION_OUTPUT_LINES,
             )

@@ -2,6 +2,7 @@ import json
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,7 +26,7 @@ def format_sse_event(data: str, *, event: str | None = None) -> str:
 
 def format_sse_json_event(payload: object, *, event: str) -> str:
     return format_sse_event(
-        json.dumps(payload, ensure_ascii=False),
+        json.dumps(jsonable_encoder(payload), ensure_ascii=False),
         event=event,
     )
 
@@ -81,7 +82,7 @@ async def chat(
             event_name = event.get("event")
             payload = event.get("data")
 
-            if event_name in {"progress", "token", "error", "suggestions"}:
+            if event_name in {"progress", "token", "error", "suggestions", "artifact"}:
                 yield format_sse_json_event(payload, event=event_name)
 
         yield format_sse_event("[DONE]", event="done")

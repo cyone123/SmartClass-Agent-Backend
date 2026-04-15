@@ -52,13 +52,22 @@ def get_file_storage_root() -> Path:
     return get_backend_root() / "storage"
 
 
+def get_public_api_base_url() -> str | None:
+    configured = get_env("PUBLIC_API_BASE_URL")
+    if configured is None:
+        return None
+
+    normalized = configured.strip().rstrip("/")
+    return normalized or None
+
+
 def get_file_upload_max_size_bytes() -> int:
     value = get_env("FILE_UPLOAD_MAX_SIZE_BYTES", "20971520") or "20971520"
     return int(value)
 
 
 def get_allowed_upload_extensions() -> set[str]:
-    raw = get_env("FILE_ALLOWED_EXTENSIONS", ".docx,.pdf") or ".docx,.pdf"
+    raw = get_env("FILE_ALLOWED_EXTENSIONS", ".docx,.pdf") or ".docx,.pdf,.mp4"
     return {
         extension.strip().lower()
         for extension in raw.split(",")

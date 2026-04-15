@@ -9,6 +9,7 @@ from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.file import AttachmentFile
+    from app.models.file import ArtifactFile
     from app.models.file import KnowledgeFile
     from app.models.session import Session
 
@@ -31,4 +32,9 @@ class Plan(Base):
         "AttachmentFile",
         back_populates="plan",
         order_by="AttachmentFile.id",
+    )
+    artifacts: Mapped[list[ArtifactFile]] = relationship(
+        "ArtifactFile",
+        back_populates="plan",
+        order_by="ArtifactFile.id",
     )

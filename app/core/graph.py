@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Awaitable, Callable
 from typing import Literal, Optional
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -16,12 +17,11 @@ from app.core.progress import emit_progress
 from app.core.rag import RagRuntime
 from app.core.state import TeachingAssistantState, TeachingMetadata
 
-ATTACHMENT_MESSAGE_PREFIX = "用户上传的附件内容（仅供本轮对话参考）：\n"
+ATTACHMENT_MESSAGE_PREFIX = "用户上传的附件内容，供当前轮对话参考：\n"
 
 
 class IntentRoute(BaseModel):
     intent: Literal["normal_chat", "teaching_plan"] = Field(
-        None,
         description="User's intention",
     )
 
@@ -34,7 +34,7 @@ router = structured_output_llm.with_structured_output(
 metadata_extractor = structured_output_llm.with_structured_output(
     TeachingMetadata,
     method="json_schema",
-    strict=True
+    strict=True,
 )
 
 
@@ -57,146 +57,6 @@ def build_input_messages(
     return messages
 
 
-def intent_router_node(
-    state: TeachingAssistantState,
-    config: Optional[RunnableConfig] = None,
-):
-    reporter = emit_progress(config, "intent_recognition", "running")
-
-    try:
-        decision = router.invoke(
-            [
-                SystemMessage(
-                    content=(
-                        "You are an intent analysis and routing node in an multi-agent workflow whose target user is teachers. "
-                        "The workflow have two ways.One way is to help teacher prepare lessons or generate teaching plan. "
-                        "Another way is normal chat in which user can talk about any things irrelevant with teaching. "
-                        "Please determine the user's intent based on the provided conversations, and strictly "
-                        "output a JSON string without any extra content. "
-                        "For lesson preparation/teaching design related requests, output "
-                        "'teaching_plan'. For other requests, output 'normal_chat'. "
-                        'For example, your output must be: {"intent": "normal_chat"} or '
-                        '{"intent": "teaching_plan"}.'
-                    )
-                ),
-            ] + state["messages"][-4:]
-        )
-        print(f"[intent_router_node] intent:{decision.intent}")
-        if reporter:
-            reporter.emit(
-                "intent_recognition",
-                "success",
-                detail=(
-                    "已识别为教学设计请求"
-                    if decision.intent == "teaching_plan"
-                    else "已识别为普通对话"
-                ),
-            )
-        return {"intent": decision.intent}
-    except Exception as exc:
-        if reporter:
-            reporter.emit("intent_recognition", "failed", detail=str(exc))
-        raise
-
-
-def route_decision(state: TeachingAssistantState):
-    if state["intent"] == "normal_chat":
-        return "normal_chat_node"
-    if state["intent"] == "teaching_plan":
-        return "metadata_structer_node"
-    return "Error"
-
-
-async def normal_chat_node(state: TeachingAssistantState):
-    response = await llm.ainvoke(state["messages"])
-    return {"messages": [response]}
-
-
-def metadata_structer_node(
-    state: TeachingAssistantState,
-    config: Optional[RunnableConfig] = None,
-):
-    reporter = emit_progress(config, "metadata_structuring", "running")
-
-    current_metadata = state.get("teaching_metadata")
-    system_prompt = (
-        "You are a structured metadata node in an intelligent agent that helps teachers "
-        "prepare lessons. Please extract teaching elements based on the user's messages "
-        "and output JSON strictly according to given fomart. Ensure all information is obtained from the user "
-        "and do not fabricate missing details. Fill incomplete fields with None. Set "
-        "is_complete to true when the elements are complete enough for retrieval and "
-        "instructional design. "
-        f"Currently extracted teaching elements: {current_metadata}"
-    )
-    original_messages = state["messages"]
-    start_time = time.perf_counter()
-    print(
-        "[metadata_structer_node] start "
-        f"original_messages={len(original_messages)}"
-    )
-
-    try:
-        response = metadata_extractor.invoke(
-            [SystemMessage(content=system_prompt)]
-            + [msg for msg in original_messages if isinstance(msg, HumanMessage)]
-        )
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        print(f"[metadata_structer_node] duration_ms={duration_ms:.2f}")
-        print(f"[metadata_structer_node] response={response}")
-        if reporter:
-            reporter.emit(
-                "metadata_structuring",
-                "success",
-                detail=(
-                    "已提取结构化元数据"
-                    if response.get("is_complete")
-                    else "已提取结构化信息，仍需补充字段"
-                ),
-            )
-        return {"teaching_metadata": response}
-    except Exception as exc:
-        if reporter:
-            reporter.emit("metadata_structuring", "failed", detail=str(exc))
-        raise
-
-
-def metadata_completion_condition(state: TeachingAssistantState):
-    metadata = state.get("teaching_metadata")
-    if metadata and metadata.get("is_complete"):
-        print("[metadata_completion_condition] is_complete=true")
-        return "rag_retrieval_node"
-
-    print("[metadata_completion_condition] is_complete=false")
-    return "follow_up_questioner"
-
-
-async def follow_up_questioner(state: TeachingAssistantState):
-    system_prompt = (
-        "你是一个帮助老师备课的智能体中的主动追问节点。"
-        "请根据当前缺失的教学要素，向用户提出问题来补全要素。"
-        # f"用户的上一个回答：{state["messages"][-1].content}"
-        f"当前教学要素：{state.get('teaching_metadata')}"
-    )
-    response = await llm.ainvoke([SystemMessage(content=system_prompt)])
-    print("[follow_up_questioner] ask follow-up question")
-    return {"messages": [response]}
-
-
-def interrupt_for_userinput(state: TeachingAssistantState):
-    print("[interrupt_for_userinput] waiting for user input")
-    user_input = interrupt({"question": state["messages"][-1].content})
-    print("[interrupt_for_userinput] resumed")
-    if isinstance(user_input, dict):
-        return {
-            "messages": build_input_messages(
-                user_input.get("message", ""),
-                user_input.get("attachment_text"),
-                user_input.get("attachment_paths"),
-            )
-        }
-    return {"messages": build_input_messages(str(user_input))}
-
-
 def _message_to_text(message: AIMessage | HumanMessage) -> str:
     content = getattr(message, "content", "")
     if isinstance(content, str):
@@ -210,6 +70,138 @@ def _message_to_text(message: AIMessage | HumanMessage) -> str:
                 parts.append(item.get("text", ""))
         return "".join(parts)
     return str(content)
+
+
+def intent_router_node(
+    state: TeachingAssistantState,
+    config: Optional[RunnableConfig] = None,
+):
+    reporter = emit_progress(config, "intent_recognition", "running")
+    try:
+        print(f"[意图识别节点] 开始识别")
+        decision = router.invoke(
+            [
+                SystemMessage(
+                    content=(
+                        "You are a intention recogonition and router node in a teacher-facing multi-agent workflow. "
+                        "Determine which way to go based on user' message. "
+                        "Return `teaching_plan` for lesson preparation, teaching design, "
+                        "courseware, lesson-plan, or interactive activity requests. "
+                        "Return `normal_chat` for everything else."
+                        "Output in JSON format strictly and no any other character."
+                        'For exmaple: {"intent": "normal_chat"} or {"intent": "teaching_plan"}. '
+                        'Do not output like this: "json\n{"intent": "normal_chat"}\n"'
+                    )
+                ),
+            ] + state["messages"][-4:]
+        )
+        print(f"[意图识别节点] intent:{decision.intent}")
+        if reporter:
+            reporter.emit(
+                "intent_recognition",
+                "success",
+                detail=(
+                    "识别为教学设计请求"
+                    if decision.intent == "teaching_plan"
+                    else "识别为普通对话"
+                ),
+            )
+        return {"intent": decision.intent}
+    except Exception as exc:
+        if reporter:
+            reporter.emit("intent_recognition", "failed", detail=str(exc))
+        raise
+
+
+def route_decision(state: TeachingAssistantState):
+    if state.get("intent") == "normal_chat":
+        return "normal_chat_node"
+    if state.get("intent") == "teaching_plan":
+        return "metadata_structer_node"
+    return "error"
+
+
+async def normal_chat_node(state: TeachingAssistantState):
+    response = await llm.ainvoke(state["messages"])
+    return {"messages": [response]}
+
+
+def metadata_structer_node(
+    state: TeachingAssistantState,
+    config: Optional[RunnableConfig] = None,
+):
+    reporter = emit_progress(config, "metadata_structuring", "running")
+    current_metadata = state.get("teaching_metadata")
+    system_prompt = (
+        "You extract structured teaching metadata for a teacher assistant. "
+        "Use only the user's provided information. Fill missing fields with None. "
+        "Set `is_complete` to true only when the metadata is complete enough for "
+        "retrieval and instructional design. "
+        "Do not explicitly contain 'json'. Do not contain newline character.\n"
+        f"Current metadata: {current_metadata}"
+    )
+    start_time = time.perf_counter()
+
+    try:
+        print("[结构化元数据节点] start ")
+        response = metadata_extractor.invoke(
+            [SystemMessage(content=system_prompt)]
+            + [msg for msg in state["messages"] if isinstance(msg, HumanMessage)]
+        )
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        print(f"[结构化元数据节点] 元数据：{response}")
+        print(f"[结构化元数据节点] 持续时间_ms={duration_ms:.2f}")
+        if reporter:
+            reporter.emit(
+                "metadata_structuring",
+                "success",
+                detail=(
+                    "已提取结构化教学要素"
+                    if response.get("is_complete")
+                    else "已提取结构化信息，仍需补充需求"
+                ),
+            )
+        return {"teaching_metadata": response}
+    except Exception as exc:
+        if reporter:
+            reporter.emit("metadata_structuring", "failed", detail=str(exc))
+        raise
+
+
+def metadata_completion_condition(state: TeachingAssistantState):
+    metadata = state.get("teaching_metadata")
+    if metadata and metadata.get("is_complete"):
+        print("[元数据完整性验证] is_complete=true")
+        return "rag_retrieval_node"
+
+    print("[元数据完整性验证] is_complete=false")
+    return "follow_up_questioner"
+
+
+async def follow_up_questioner(state: TeachingAssistantState):
+    system_prompt = (
+        "你是教学助手中的追问节点，需要主动追问用户来补充教学要素。"
+        "请根据当前缺失的教学要素，向用户提出关键、自然、合适的补充问题。\n"
+        f"当前教学要素：{state.get('teaching_metadata')}"
+    )
+    response = await llm.ainvoke([SystemMessage(content=system_prompt)])
+    print("[主动追问节点] ask follow-up question")
+    return {"messages": [response]}
+
+
+def interrupt_for_userinput(state: TeachingAssistantState):
+    print("[中断等待用户输入] waiting for user input")
+    user_input = interrupt({"question": state["messages"][-1].content})
+    print("[中断恢复] resumed")
+    if isinstance(user_input, dict):
+        return {
+            "messages": build_input_messages(
+                user_input.get("message", ""),
+                user_input.get("attachment_text"),
+                user_input.get("attachment_paths"),
+            )
+        }
+    return {"messages": build_input_messages(str(user_input))}
 
 
 def _build_rag_query(state: TeachingAssistantState) -> str:
@@ -231,22 +223,18 @@ async def teaching_design_planner(
     config: Optional[RunnableConfig] = None,
 ):
     reporter = emit_progress(config, "teaching_design", "running")
-
     system_prompt = (
-        "你是一个帮助老师备课生成教学设计的总体规划节点。"
-        "请根据用户需求、教学元数据和检索到的参考资料，输出一份完整且可执行的教学设计计划，"
-        "供后续生成 PPT 和教案节点参考。"
+        "你是一个教师助理中的教学设计规划节点。"
+        "请根据用户需求、结构化教学要素和检索上下文，输出一份完整、可执行的教学设计方案。"
+        "这份结果将作为后续课件、教案和互动内容生成的直接输入。\n"
         f"教学元数据：{state.get('teaching_metadata')}\n"
         f"RAG 上下文：{state.get('rag_context', '')}"
     )
 
     try:
-        response = await llm.ainvoke(
-            [SystemMessage(content=system_prompt)] + state["messages"],
-        )
-        print("===[teaching_design_planner] generated teaching design plan===")
+        response = await llm.ainvoke([SystemMessage(content=system_prompt)] + state["messages"])
         if reporter:
-            reporter.emit("teaching_design", "success", detail="已生成教学设计")
+            reporter.emit("teaching_design", "success", detail="已生成教学设计方案")
         return {
             "teaching_design_plan": _message_to_text(response).strip(),
             "messages": [response],
@@ -259,10 +247,11 @@ async def teaching_design_planner(
 
 def build_agent_graph(
     *,
-    streaming: bool = False,
     checkpointer: AsyncPostgresSaver,
     rag_runtime: RagRuntime,
-    agent_runnable,
+    ppt_generate_node: Callable[[TeachingAssistantState, RunnableConfig | None], Awaitable[dict]],
+    docx_generate_node: Callable[[TeachingAssistantState, RunnableConfig | None], Awaitable[dict]],
+    html_generate_node: Callable[[TeachingAssistantState, RunnableConfig | None], Awaitable[dict]],
 ):
     async def rag_retrieval_node(
         state: TeachingAssistantState,
@@ -276,7 +265,6 @@ def build_agent_graph(
                 query,
                 plan_id=state.get("plan_id"),
             )
-            print(f"[rag_retrieval_node] raw_result_count={len(result)}")
             rag_results = [
                 {
                     "page_content": document.page_content,
@@ -285,6 +273,7 @@ def build_agent_graph(
                 for document in result
             ]
             rag_context = "\n\n".join(document["page_content"] for document in rag_results)
+            print(f"[RAG节点] 检索到资料={rag_context}")
             if reporter:
                 reporter.emit(
                     "rag_retrieval",
@@ -297,6 +286,11 @@ def build_agent_graph(
                 reporter.emit("rag_retrieval", "failed", detail=str(exc))
             raise
 
+    async def artifact_fan_in_node(state: TeachingAssistantState, config: RunnableConfig | None = None):
+        _ = state
+        _ = config
+        return {}
+
     agent_builder = StateGraph(TeachingAssistantState)
     agent_builder.add_node("intent_router_node", intent_router_node)
     agent_builder.add_node("normal_chat_node", normal_chat_node)
@@ -305,7 +299,10 @@ def build_agent_graph(
     agent_builder.add_node("interrupt_for_userinput", interrupt_for_userinput)
     agent_builder.add_node("rag_retrieval_node", rag_retrieval_node)
     agent_builder.add_node("teaching_design_planner", teaching_design_planner)
-    agent_builder.add_node("ppt_generate_node", agent_runnable)
+    agent_builder.add_node("ppt_generate_node", ppt_generate_node)
+    agent_builder.add_node("docx_generate_node", docx_generate_node)
+    agent_builder.add_node("html_game_generate_node", html_generate_node)
+    agent_builder.add_node("artifact_fan_in_node", artifact_fan_in_node)
 
     agent_builder.add_edge(START, "intent_router_node")
     agent_builder.add_conditional_edges(
@@ -328,8 +325,12 @@ def build_agent_graph(
     agent_builder.add_edge("follow_up_questioner", "interrupt_for_userinput")
     agent_builder.add_edge("interrupt_for_userinput", "metadata_structer_node")
     agent_builder.add_edge("rag_retrieval_node", "teaching_design_planner")
-    # agent_builder.add_edge("teaching_design_planner", END)
-    agent_builder.add_edge("teaching_design_planner", "ppt_generate_node")
-    agent_builder.add_edge("ppt_generate_node", END)
+    # agent_builder.add_edge("teaching_design_planner", "ppt_generate_node")
+    # agent_builder.add_edge("teaching_design_planner", "docx_generate_node")
+    agent_builder.add_edge("teaching_design_planner", "html_game_generate_node")
+    # agent_builder.add_edge("ppt_generate_node", "artifact_fan_in_node")
+    # agent_builder.add_edge("docx_generate_node", "artifact_fan_in_node")
+    agent_builder.add_edge("html_game_generate_node", "artifact_fan_in_node")
+    agent_builder.add_edge("artifact_fan_in_node", END)
 
     return agent_builder.compile(checkpointer=checkpointer)

@@ -1,6 +1,18 @@
 ---
 name: docx
 description: "Use this skill whenever the user wants to create, read, edit, or manipulate Word documents (.docx files). Triggers include: any mention of 'Word doc', 'word document', '.docx', or requests to produce professional documents with formatting like tables of contents, headings, page numbers, or letterheads. Also use when extracting or reorganizing content from .docx files, inserting or replacing images in documents, performing find-and-replace in Word files, working with tracked changes or comments, or converting content into a polished Word document. If the user asks for a 'report', 'memo', 'letter', 'template', or similar deliverable as a Word or .docx file, use this skill. Do NOT use for PDFs, spreadsheets, Google Docs, or general coding tasks unrelated to document generation."
+compatibility: |
+  Requires Node.js on the host. Creating real `.docx` files also requires the `docx`
+  package to already be available in the host environment or bundled by the application.
+  Do not install dependencies at runtime with npm, pnpm, yarn, npx, pip, or shell package managers.
+allowed-tools:
+  - list_workspace_files
+  - read_workspace_file
+  - write_workspace_file
+  - run_workspace_code
+metadata:
+  default-output: docx
+  preferred-runtime: node
 ---
 
 # DOCX creation, editing, and analysis
@@ -69,7 +81,7 @@ Packer.toBuffer(doc).then(buffer => fs.writeFileSync("doc.docx", buffer));
 ```
 
 ### Validation
-After creating the file, validate it. If validation fails, unpack, fix the XML, and repack.
+After creating the file, use script to validate it. If validation fails, unpack, fix the XML, and repack.
 ```bash
 python scripts/office/validate.py doc.docx
 ```

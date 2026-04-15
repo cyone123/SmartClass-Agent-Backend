@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict
 from app.schemas.response import BaseResponse
 
 KnowledgeFileStatus = Literal["uploaded", "indexing", "ready", "failed", "deleted"]
+ArtifactStatus = Literal["pending", "running", "ready", "failed"]
+ArtifactType = Literal["ppt", "docx", "html-game"]
 
 
 class KnowledgeFile(BaseModel):
@@ -56,4 +58,25 @@ class AttachmentFile(BaseModel):
 
 
 class AttachmentFileResponse(BaseResponse[AttachmentFile]):
+    pass
+
+
+class ArtifactFile(BaseModel):
+    id: int
+    type: ArtifactType
+    title: str
+    status: ArtifactStatus
+    mime_type: str
+    plan_id: int
+    thread_id: str
+    extension: str
+    size_bytes: int
+    url: str | None = None
+    preview_url: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ArtifactFileListResponse(BaseResponse[list[ArtifactFile]]):
     pass

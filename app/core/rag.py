@@ -46,7 +46,7 @@ class RagRuntime:
 
     async def init_vector_store(self) -> RagRuntime:
         if self.vector_size is None:
-            probe_vector = await self.embedding_model.aembed_query("vector size probe")
+            # probe_vector = await self.embedding_model.aembed_query("vector size probe")
             self.vector_size = 3072
 
         if not await self._vector_table_exists():
