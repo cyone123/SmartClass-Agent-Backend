@@ -12,6 +12,7 @@ from app.api.session import router as session_router
 from app.core.agent import create_agent_runtime
 from app.core.file_ingestion import FileIngestionRuntime
 from app.core.rag import create_rag_runtime
+from app.core.speech import create_speech_runtime
 from app.core.skills import create_skill_registry
 from app.dependencies.db import close_db_resources, init_db
 
@@ -25,12 +26,15 @@ async def lifespan(app: FastAPI):
     file_ingestion_runtime = None
     rag_runtime = None
     skill_registry = None
+    speech_runtime = None
     try:
         await init_db()
         skill_registry = create_skill_registry()
         app.state.skill_registry = skill_registry
         rag_runtime = await create_rag_runtime()
         app.state.rag_runtime = rag_runtime
+        speech_runtime = create_speech_runtime()
+        app.state.speech_runtime = speech_runtime
         file_ingestion_runtime = FileIngestionRuntime(rag_runtime)
         await file_ingestion_runtime.start()
         app.state.file_ingestion_runtime = file_ingestion_runtime

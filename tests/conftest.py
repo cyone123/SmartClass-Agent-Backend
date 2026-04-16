@@ -21,6 +21,20 @@ os.environ.setdefault("STRUCTED_BASE_URL", "https://example.com")
 os.environ.setdefault("SMALL_MDOEL", "test-model")
 os.environ.setdefault("SMALL_API_KEY", "test-key")
 os.environ.setdefault("SMALL_BASE_URL", "https://example.com")
+os.environ.setdefault("STT_MODEL", "test-stt-model")
+os.environ.setdefault("STT_API_KEY", "test-key")
+os.environ.setdefault("STT_BASE_URL", "https://example.com")
+for proxy_key in (
+    "ALL_PROXY",
+    "all_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "NO_PROXY",
+    "no_proxy",
+):
+    os.environ.pop(proxy_key, None)
 
 
 @pytest.fixture

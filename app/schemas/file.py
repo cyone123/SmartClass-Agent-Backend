@@ -61,6 +61,16 @@ class AttachmentFileResponse(BaseResponse[AttachmentFile]):
     pass
 
 
+class VoiceTranscriptionResult(BaseModel):
+    attachment: AttachmentFile
+    transcript: str
+    language: str | None = None
+
+
+class VoiceTranscriptionResponse(BaseResponse[VoiceTranscriptionResult]):
+    pass
+
+
 class ArtifactFile(BaseModel):
     id: int
     type: ArtifactType

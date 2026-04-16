@@ -66,10 +66,55 @@ def get_file_upload_max_size_bytes() -> int:
     return int(value)
 
 
-def get_allowed_upload_extensions() -> set[str]:
-    raw = get_env("FILE_ALLOWED_EXTENSIONS", ".docx,.pdf") or ".docx,.pdf,.mp4"
+def _parse_allowed_extensions(raw: str | None, default: str) -> set[str]:
+    value = raw if raw is not None else default
     return {
         extension.strip().lower()
-        for extension in raw.split(",")
+        for extension in value.split(",")
         if extension.strip()
     }
+
+
+def get_allowed_knowledge_upload_extensions() -> set[str]:
+    return _parse_allowed_extensions(
+        get_env("KNOWLEDGE_FILE_ALLOWED_EXTENSIONS"),
+        ".docx,.pdf",
+    )
+
+
+def get_allowed_attachment_upload_extensions() -> set[str]:
+    return _parse_allowed_extensions(
+        get_env("ATTACHMENT_FILE_ALLOWED_EXTENSIONS"),
+        ".docx,.pdf",
+    )
+
+
+def get_allowed_voice_upload_extensions() -> set[str]:
+    return _parse_allowed_extensions(
+        get_env("VOICE_FILE_ALLOWED_EXTENSIONS"),
+        ".webm,.wav,.mp3,.m4a,.mp4,.ogg",
+    )
+
+
+def get_allowed_upload_extensions() -> set[str]:
+    return get_allowed_knowledge_upload_extensions()
+
+
+def get_stt_model() -> str | None:
+    return get_env("STT_MODEL") or get_env("MODEL")
+
+
+def get_stt_base_url() -> str | None:
+    return get_env("STT_BASE_URL") or get_env("BASE_URL")
+
+
+def get_stt_api_key() -> str | None:
+    return get_env("STT_API_KEY") or get_env("API_KEY")
+
+
+def get_stt_language() -> str | None:
+    configured = get_env("STT_LANGUAGE")
+    if configured is None:
+        return None
+    normalized = configured.strip()
+    return normalized or None

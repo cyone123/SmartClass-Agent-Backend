@@ -14,7 +14,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import (
-    get_allowed_upload_extensions,
+    get_allowed_attachment_upload_extensions,
+    get_allowed_knowledge_upload_extensions,
+    get_allowed_voice_upload_extensions,
     get_file_storage_root,
     get_file_upload_max_size_bytes,
 )
@@ -69,10 +71,25 @@ def _build_attachment_storage_path(
     return stored_name, storage_path
 
 
-async def _read_and_validate_upload_file(upload_file: UploadFile) -> tuple[str, str, bytes, int, str, str]:
-    original_name = upload_file.filename
+def _normalize_extension(extension: str | None) -> str:
+    return (extension or "").strip().lower()
+
+
+def is_voice_attachment_extension(extension: str | None) -> bool:
+    return _normalize_extension(extension) in get_allowed_voice_upload_extensions()
+
+
+def is_document_attachment_extension(extension: str | None) -> bool:
+    return _normalize_extension(extension) in get_allowed_attachment_upload_extensions()
+
+
+async def _read_and_validate_upload_file(
+    upload_file: UploadFile,
+    *,
+    allowed_extensions: set[str],
+) -> tuple[str, str, bytes, int, str, str]:
+    original_name = upload_file.filename or "file"
     extension = Path(original_name).suffix.lower()
-    allowed_extensions = get_allowed_upload_extensions()
     if extension not in allowed_extensions:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -204,7 +221,10 @@ async def create_file_from_upload(
 ) -> KnowledgeFile:
     await ensure_plan_exists(db, plan_id)
     original_name, extension, content, size_bytes, sha256, mime_type = (
-        await _read_and_validate_upload_file(upload_file)
+        await _read_and_validate_upload_file(
+            upload_file,
+            allowed_extensions=get_allowed_knowledge_upload_extensions(),
+        )
     )
 
     existing = await get_existing_file_by_hash(db, plan_id=plan_id, sha256=sha256)
@@ -250,7 +270,10 @@ async def create_attachment_from_upload(
     await ensure_plan_exists(db, plan_id)
     await ensure_thread_belongs_to_plan(db, plan_id, thread_id)
     original_name, extension, content, size_bytes, sha256, mime_type = (
-        await _read_and_validate_upload_file(upload_file)
+        await _read_and_validate_upload_file(
+            upload_file,
+            allowed_extensions=get_allowed_attachment_upload_extensions(),
+        )
     )
 
     existing = await get_existing_attachment_by_hash(
@@ -260,6 +283,63 @@ async def create_attachment_from_upload(
         sha256=sha256,
     )
     if existing is not None:
+        return existing
+
+    attachment_record = AttachmentFile(
+        plan_id=plan_id,
+        thread_id=thread_id,
+        original_name=original_name,
+        stored_name="",
+        extension=extension,
+        mime_type=mime_type,
+        size_bytes=size_bytes,
+        sha256=sha256,
+        storage_path="",
+    )
+    db.add(attachment_record)
+    await db.flush()
+
+    stored_name, storage_path = _build_attachment_storage_path(
+        plan_id,
+        thread_id,
+        attachment_record.id,
+        original_name,
+    )
+    storage_path.parent.mkdir(parents=True, exist_ok=True)
+    storage_path.write_bytes(content)
+
+    attachment_record.stored_name = stored_name
+    attachment_record.storage_path = str(storage_path)
+    attachment_record.updated_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    await db.refresh(attachment_record)
+    return attachment_record
+
+
+async def create_voice_attachment_from_upload(
+    db: AsyncSession,
+    *,
+    plan_id: int,
+    thread_id: str,
+    upload_file: UploadFile,
+) -> AttachmentFile:
+    await ensure_plan_exists(db, plan_id)
+    await ensure_thread_belongs_to_plan(db, plan_id, thread_id)
+    original_name, extension, content, size_bytes, sha256, mime_type = (
+        await _read_and_validate_upload_file(
+            upload_file,
+            allowed_extensions=get_allowed_voice_upload_extensions(),
+        )
+    )
+
+    existing = await get_existing_attachment_by_hash(
+        db,
+        plan_id=plan_id,
+        thread_id=thread_id,
+        sha256=sha256,
+    )
+    if existing is not None and is_voice_attachment_extension(existing.extension):
         return existing
 
     attachment_record = AttachmentFile(
@@ -343,6 +423,14 @@ async def get_attachment_storage_paths_by_ids(
     )
     storage_paths: list[str] = []
     for attachment in attachments:
+        if is_voice_attachment_extension(attachment.extension):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Attachment {attachment.id} is a voice attachment and cannot be "
+                    "used for document attachment analysis."
+                ),
+            )
         if not attachment.storage_path or not Path(attachment.storage_path).exists():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

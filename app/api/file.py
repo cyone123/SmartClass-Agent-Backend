@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_public_api_base_url
 from app.core.file_ingestion import FileIngestionRuntime, get_file_ingestion_runtime
 from app.core.rag import RagRuntime, get_rag_runtime
+from app.core.speech import SpeechRuntime, get_speech_runtime
 from app.dependencies.db import get_db
 from app.models.file import ArtifactFile as ArtifactFileModel
 from app.models.file import KnowledgeFile as KnowledgeFileModel
@@ -20,6 +21,7 @@ from app.schemas.file import (
     AttachmentFileResponse,
     KnowledgeFileListResponse,
     KnowledgeFileResponse,
+    VoiceTranscriptionResponse,
 )
 from app.schemas.response import success_response
 from app.services import artifact_service, file_service
@@ -163,6 +165,42 @@ async def upload_attachment_file(
     return success_response(
         data=attachment_record,
         response_model=AttachmentFileResponse,
+    )
+
+
+@router.post("/file/attachment/voice/transcribe", response_model=VoiceTranscriptionResponse)
+async def transcribe_voice_attachment(
+    plan_id: int,
+    thread_id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    speech_runtime: SpeechRuntime = Depends(get_speech_runtime),
+) -> VoiceTranscriptionResponse:
+    attachment_record = await file_service.create_voice_attachment_from_upload(
+        db,
+        plan_id=plan_id,
+        thread_id=thread_id,
+        upload_file=file,
+    )
+    try:
+        transcription = await speech_runtime.transcribe(
+            file_path=Path(attachment_record.storage_path),
+            filename=attachment_record.original_name,
+            mime_type=attachment_record.mime_type,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    payload = {
+        "attachment": attachment_record,
+        "transcript": transcription.text,
+        "language": transcription.language,
+    }
+    return success_response(
+        data=payload,
+        response_model=VoiceTranscriptionResponse,
     )
 
 
