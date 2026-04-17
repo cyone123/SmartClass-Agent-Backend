@@ -45,9 +45,11 @@ from app.core.progress import (
 from app.core.rag import RagRuntime
 from app.core.skills import SkillRegistry, SkillToolset, create_skill_registry
 from app.core.state import SubAgentResult, TeachingAssistantState
+from app.core.video_transcribe import VideoTranscriptionRuntime
 from app.core.workspace import WorkspaceToolset, get_workspace_paths
 from app.dependencies.db import AsyncSessionLocal, close_agent_checkpointer, init_agent_checkpointer
-from app.services import artifact_service
+from app.models.file import AttachmentFile
+from app.services import artifact_service, file_service
 
 ArtifactType = Literal["ppt", "docx", "html-game"]
 ArtifactEventEmitter = Callable[[dict[str, Any]], None]
@@ -506,6 +508,7 @@ class AgentRuntime:
         checkpointer: AsyncPostgresSaver,
         rag_runtime: RagRuntime,
         skill_registry: SkillRegistry,
+        video_transcription_runtime: VideoTranscriptionRuntime,
     ) -> None:
         self.skill_registry = skill_registry
         self.backend_root = get_backend_root()
@@ -513,6 +516,7 @@ class AgentRuntime:
         self.workspace_toolset = WorkspaceToolset()
         self.checkpointer = checkpointer
         self.rag_runtime = rag_runtime
+        self.video_transcription_runtime = video_transcription_runtime
         self.suggestion_generator = get_small_model(streaming=False)
         self._thread_locks: dict[str | None, asyncio.Lock] = {}
         self._thread_locks_guard = asyncio.Lock()
@@ -682,6 +686,54 @@ class AgentRuntime:
             progress_reporter.emit("attachment_analysis", "success", detail="已完成附件分析")
         return final_msg_content
 
+    def _partition_attachments(
+        self,
+        attachments: list[AttachmentFile],
+    ) -> tuple[list[str], list[AttachmentFile]]:
+        document_paths: list[str] = []
+        video_attachments: list[AttachmentFile] = []
+        for attachment in attachments:
+            if file_service.is_video_attachment_record(attachment):
+                video_attachments.append(attachment)
+            else:
+                document_paths.append(attachment.storage_path)
+        return document_paths, video_attachments
+
+    async def build_attachment_text(
+        self,
+        message: str,
+        attachments: list[AttachmentFile],
+        *,
+        thread_id: str | None = None,
+        run_id: str | None = None,
+        progress_reporter: ProgressReporter | None = None,
+    ) -> str:
+        sections: list[str] = []
+        document_paths, video_attachments = self._partition_attachments(attachments)
+
+        if document_paths:
+            document_summary = await self.analyze_attachments(
+                message,
+                document_paths,
+                thread_id=thread_id,
+                run_id=run_id,
+                progress_reporter=progress_reporter,
+            )
+            if document_summary.strip():
+                sections.append(f"文档附件摘要：\n{document_summary.strip()}")
+
+        for attachment in video_attachments:
+            video_summary = await self.video_transcription_runtime.analyze(
+                file_path=Path(attachment.storage_path),
+                filename=attachment.original_name,
+                mime_type=attachment.mime_type,
+                progress_reporter=progress_reporter,
+            )
+            if video_summary.strip():
+                sections.append(video_summary.strip())
+
+        return "\n\n---\n\n".join(section for section in sections if section.strip()).strip()
+
     async def _get_thread_lock(self, thread_id: str | None) -> asyncio.Lock:
         async with self._thread_locks_guard:
             lock = self._thread_locks.get(thread_id)
@@ -757,10 +809,10 @@ class AgentRuntime:
             SystemMessage(
                 content=(
                     "我将提供一段 AI 与用户的对话。"
-                    "请扮演用户，生成恰好 3 条最自然、最有价值的简短的中文回复。"
+                    "请你扮演用户，生成恰好 3 条最自然、最有价值的简短的中文回复。"
                     "请严格使用换行分隔每一条建议，每行只写一条。"
                     "每条都必须是用户可以直接发送给 AI 的完整句子。"
-                    "建议要简洁、清晰、和刚刚的 AI 回复紧密相关。"
+                    "要简洁、清晰、和刚刚的 AI 回复紧密相关。"
                     "不要编号，不要解释，只返回 3 行纯文本。"
                 )
             ),
@@ -1094,18 +1146,30 @@ class AgentRuntime:
         *,
         run_id: str,
         plan_id: int | None = None,
-        attachment_paths: list[str] | None = None,
+        attachments: list[AttachmentFile] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         graph_thread_id = thread_id or run_id
         lock = await self._get_thread_lock(graph_thread_id)
         event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         loop = asyncio.get_running_loop()
 
-        def emit_progress_event(event: dict[str, Any]) -> None:
+        def enqueue_event(event: dict[str, Any]) -> None:
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+
+            if current_loop is loop:
+                event_queue.put_nowait(event)
+                return
+
             loop.call_soon_threadsafe(event_queue.put_nowait, event)
 
+        def emit_progress_event(event: dict[str, Any]) -> None:
+            enqueue_event(event)
+
         def emit_artifact_event(event: dict[str, Any]) -> None:
-            loop.call_soon_threadsafe(event_queue.put_nowait, event)
+            enqueue_event(event)
 
         progress_tracker = ProgressTracker(run_id=run_id)
         progress_reporter = ProgressReporter(
@@ -1118,10 +1182,11 @@ class AgentRuntime:
             try:
                 async with lock:
                     attachment_text: str | None = None
-                    if attachment_paths:
-                        attachment_text = await self.analyze_attachments(
+                    attachment_paths = [attachment.storage_path for attachment in attachments] if attachments else None
+                    if attachments:
+                        attachment_text = await self.build_attachment_text(
                             message,
-                            attachment_paths,
+                            attachments,
                             thread_id=graph_thread_id,
                             run_id=run_id,
                             progress_reporter=progress_reporter,
@@ -1134,6 +1199,8 @@ class AgentRuntime:
                         attachment_text=attachment_text,
                         attachment_paths=attachment_paths,
                     )
+                    print("==============图的输入=========:")
+                    print(f"{graph_input}")
                     received_text_chunk = False
                     async for event in self.streaming_graph.astream(
                         graph_input,
@@ -1228,12 +1295,16 @@ class AgentRuntime:
 async def create_agent_runtime(
     rag_runtime: RagRuntime,
     skill_registry: SkillRegistry | None = None,
+    video_transcription_runtime: VideoTranscriptionRuntime | None = None,
 ) -> AgentRuntime:
     checkpointer = await init_agent_checkpointer()
+    if video_transcription_runtime is None:
+        raise RuntimeError("Video transcription runtime is required.")
     return AgentRuntime(
         checkpointer=checkpointer,
         rag_runtime=rag_runtime,
         skill_registry=skill_registry or create_skill_registry(),
+        video_transcription_runtime=video_transcription_runtime,
     )
 
 

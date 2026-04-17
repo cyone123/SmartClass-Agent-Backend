@@ -83,6 +83,29 @@ def is_document_attachment_extension(extension: str | None) -> bool:
     return _normalize_extension(extension) in get_allowed_attachment_upload_extensions()
 
 
+def is_video_attachment_extension(extension: str | None) -> bool:
+    return _normalize_extension(extension) == ".mp4"
+
+
+def _mime_type_matches(mime_type: str | None, prefix: str) -> bool:
+    return (mime_type or "").strip().lower().startswith(prefix)
+
+
+def is_voice_attachment_record(attachment: AttachmentFile) -> bool:
+    if _mime_type_matches(attachment.mime_type, "audio/"):
+        return True
+    return _normalize_extension(attachment.extension) in (get_allowed_voice_upload_extensions() - {".mp4"})
+
+
+def is_video_attachment_record(attachment: AttachmentFile) -> bool:
+    if _mime_type_matches(attachment.mime_type, "video/"):
+        return True
+    return is_video_attachment_extension(attachment.extension) and not _mime_type_matches(
+        attachment.mime_type,
+        "audio/",
+    )
+
+
 async def _read_and_validate_upload_file(
     upload_file: UploadFile,
     *,
@@ -415,7 +438,7 @@ async def get_attachment_storage_paths_by_ids(
     thread_id: str,
     attachment_ids: list[int],
 ) -> list[str]:
-    attachments = await get_attachments_by_ids(
+    attachments = await get_chat_attachments_by_ids(
         db,
         plan_id=plan_id,
         thread_id=thread_id,
@@ -423,12 +446,30 @@ async def get_attachment_storage_paths_by_ids(
     )
     storage_paths: list[str] = []
     for attachment in attachments:
-        if is_voice_attachment_extension(attachment.extension):
+        storage_paths.append(attachment.storage_path)
+    return storage_paths
+
+
+async def get_chat_attachments_by_ids(
+    db: AsyncSession,
+    *,
+    plan_id: int,
+    thread_id: str,
+    attachment_ids: list[int],
+) -> list[AttachmentFile]:
+    attachments = await get_attachments_by_ids(
+        db,
+        plan_id=plan_id,
+        thread_id=thread_id,
+        attachment_ids=attachment_ids,
+    )
+    for attachment in attachments:
+        if is_voice_attachment_record(attachment):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
                     f"Attachment {attachment.id} is a voice attachment and cannot be "
-                    "used for document attachment analysis."
+                    "used for chat attachment analysis."
                 ),
             )
         if not attachment.storage_path or not Path(attachment.storage_path).exists():
@@ -436,8 +477,7 @@ async def get_attachment_storage_paths_by_ids(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Stored attachment content not found for attachment {attachment.id}.",
             )
-        storage_paths.append(attachment.storage_path)
-    return storage_paths
+    return attachments
 
 
 async def parse_attachment_files(

@@ -14,6 +14,7 @@ from app.core.file_ingestion import FileIngestionRuntime
 from app.core.rag import create_rag_runtime
 from app.core.speech import create_speech_runtime
 from app.core.skills import create_skill_registry
+from app.core.video_transcribe import create_video_transcription_runtime
 from app.dependencies.db import close_db_resources, init_db
 
 if sys.platform.startswith("win") and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
@@ -27,6 +28,7 @@ async def lifespan(app: FastAPI):
     rag_runtime = None
     skill_registry = None
     speech_runtime = None
+    video_transcription_runtime = None
     try:
         await init_db()
         skill_registry = create_skill_registry()
@@ -35,12 +37,17 @@ async def lifespan(app: FastAPI):
         app.state.rag_runtime = rag_runtime
         speech_runtime = create_speech_runtime()
         app.state.speech_runtime = speech_runtime
+        video_transcription_runtime = create_video_transcription_runtime(
+            speech_runtime=speech_runtime,
+        )
+        app.state.video_transcription_runtime = video_transcription_runtime
         file_ingestion_runtime = FileIngestionRuntime(rag_runtime)
         await file_ingestion_runtime.start()
         app.state.file_ingestion_runtime = file_ingestion_runtime
         agent_runtime = await create_agent_runtime(
             rag_runtime,
             skill_registry=skill_registry,
+            video_transcription_runtime=video_transcription_runtime,
         )
         app.state.agent_runtime = agent_runtime
         yield

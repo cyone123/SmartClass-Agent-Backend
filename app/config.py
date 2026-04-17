@@ -85,7 +85,7 @@ def get_allowed_knowledge_upload_extensions() -> set[str]:
 def get_allowed_attachment_upload_extensions() -> set[str]:
     return _parse_allowed_extensions(
         get_env("ATTACHMENT_FILE_ALLOWED_EXTENSIONS"),
-        ".docx,.pdf",
+        ".docx,.pdf,.mp4",
     )
 
 
@@ -118,3 +118,19 @@ def get_stt_language() -> str | None:
         return None
     normalized = configured.strip()
     return normalized or None
+
+
+def get_video_ffmpeg_bin() -> str:
+    return (get_env("VIDEO_FFMPEG_BIN", "ffmpeg") or "ffmpeg").strip() or "ffmpeg"
+
+
+def get_video_vision_model() -> str | None:
+    return get_env("VIDEO_VISION_MODEL") or get_env("MODEL")
+
+
+def get_video_vision_base_url() -> str | None:
+    return get_env("VIDEO_VISION_BASE_URL") or get_env("BASE_URL")
+
+
+def get_video_vision_api_key() -> str | None:
+    return get_env("VIDEO_VISION_API_KEY") or get_env("API_KEY")

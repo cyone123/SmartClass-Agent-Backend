@@ -35,10 +35,9 @@ metadata:
 - 不要在代码里安装依赖；依赖是否存在由宿主环境决定。
 - 生成代码时优先写成单文件、可重复执行、带清晰注释的脚本。
 
-## 输出格式路由
+## 输出格式
 
 - 用户明确要 `.pptx`、PowerPoint、WPS 可编辑文件：走 `.pptx` 路径。
-- 用户明确要网页演示或浏览器播放：走 HTML 路径。
 - 用户没有说明格式：默认走 `.pptx` 路径。
 
 ## 推荐流程
@@ -51,7 +50,6 @@ metadata:
 
 ### 2. 选择参考资料
 
-- HTML 可视化页面：阅读 `references/html-prompt.md`。
 - SVG 单页视觉稿：阅读 `references/svg-prompt.md`。
 - `.pptx` 脚本结构：阅读 `references/pptx-scaffold.md`。
 
@@ -68,7 +66,6 @@ metadata:
 ### 4. 执行代码
 
 - Node.js 脚本用 `run_workspace_code(language="node", entrypoint="generate_ppt.js")`
-- Python 脚本用 `run_workspace_code(language="python", entrypoint="generate_slides.py")`
 - 执行后检查返回的：
   `exit_code`、`stdout`、`stderr`、`output_files`
 
@@ -86,12 +83,6 @@ metadata:
 - 页面比例默认 16:9。
 - 结构默认包含：
   封面、目录/概览、核心知识页、活动设计页、总结页。
-
-## HTML 路径要求
-
-- 输出单文件 HTML 优先。
-- 允许引用 CDN 资源，但不要在运行时依赖本地安装前端构建工具。
-- 保持 16:9 演示友好，适配桌面展示。
 
 ## 失败处理
 

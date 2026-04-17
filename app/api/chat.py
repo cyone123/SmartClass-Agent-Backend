@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.agent import AgentRuntime, get_agent_runtime
+from app.models.file import AttachmentFile
 from app.dependencies.db import get_db
 from app.schemas.chat import ChatRequest
 from app.services import file_service, session_service
@@ -46,7 +47,7 @@ async def chat(
         )
 
     plan_id = None
-    attachment_paths: list[str] | None = None
+    attachments: list[AttachmentFile] | None = None
     if thread_id:
         session = await session_service.get_session_by_thread_id(db, thread_id)
         if session is not None:
@@ -58,7 +59,7 @@ async def chat(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Thread {thread_id} not found.",
             )
-        attachment_paths = await file_service.get_attachment_storage_paths_by_ids(
+        attachments = await file_service.get_chat_attachments_by_ids(
             db,
             plan_id=plan_id,
             thread_id=thread_id,
@@ -77,7 +78,7 @@ async def chat(
             thread_id,
             run_id=run_id,
             plan_id=plan_id,
-            attachment_paths=attachment_paths,
+            attachments=attachments,
         ):
             event_name = event.get("event")
             payload = event.get("data")

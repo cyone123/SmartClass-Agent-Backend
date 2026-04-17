@@ -221,7 +221,7 @@ def test_chat_stream_rejects_voice_attachments(monkeypatch) -> None:
         _ = db
         return SimpleNamespace(plan_id=1, thread_id=thread_id)
 
-    async def fake_get_attachments_by_ids(db, *, plan_id, thread_id, attachment_ids):
+    async def fake_get_chat_attachments_by_ids(db, *, plan_id, thread_id, attachment_ids):
         _ = db, plan_id, thread_id, attachment_ids
         return [
             AttachmentFile(
@@ -240,7 +240,7 @@ def test_chat_stream_rejects_voice_attachments(monkeypatch) -> None:
 
     async def run() -> None:
         monkeypatch.setattr(session_service, "get_session_by_thread_id", fake_get_session_by_thread_id)
-        monkeypatch.setattr(file_service, "get_attachments_by_ids", fake_get_attachments_by_ids)
+        monkeypatch.setattr(file_service, "get_chat_attachments_by_ids", fake_get_chat_attachments_by_ids)
 
         app = FastAPI()
         app.include_router(chat_router)
