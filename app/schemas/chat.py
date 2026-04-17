@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field, model_validator
 class ApprovalActionRequest(BaseModel):
     action: Literal["approve"] = Field(..., description="Approval action")
     interrupt_id: str = Field(..., min_length=1, description="Pending interrupt id")
+    selected_artifact_types: Optional[list[Literal["ppt", "docx", "html-game"]]] = Field(
+        default=None,
+        description="Selected artifact types for teaching plan approval",
+    )
 
 
 class ChatRequest(BaseModel):

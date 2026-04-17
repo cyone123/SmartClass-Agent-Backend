@@ -34,6 +34,7 @@ class TeachingAssistantState(TypedDict):
     rag_context: NotRequired[str]
     rag_results: NotRequired[list[dict[str, Any]]]
     teaching_design_plan: NotRequired[str]
+    generation_targets: NotRequired[list[Literal["ppt", "docx", "html-game"]]]
     artifact_catalog: NotRequired[list[dict[str, Any]]]
     ppt_result: NotRequired[SubAgentResult]
     lesson_plan_result: NotRequired[SubAgentResult]

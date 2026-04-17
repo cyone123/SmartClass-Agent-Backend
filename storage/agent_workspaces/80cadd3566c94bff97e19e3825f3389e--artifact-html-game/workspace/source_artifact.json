@@ -1,0 +1,13 @@
+{
+  "id": 15,
+  "type": "html-game",
+  "title": "互动内容",
+  "status": "ready",
+  "thread_id": "80cadd3566c94bff97e19e3825f3389e",
+  "plan_id": 6,
+  "storage_path": "D:\\Learn\\langchain\\demo\\backend\\storage\\artifacts\\80cadd3566c94bff97e19e3825f3389e\\html-game\\6b767160618f4e588e002f25b4e5ab10-html-game_artifact.html",
+  "revision_number": 1,
+  "parent_artifact_id": null,
+  "root_artifact_id": 15,
+  "is_current": true
+}

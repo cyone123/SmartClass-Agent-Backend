@@ -22,9 +22,15 @@ ProgressStepKey = Literal[
     "rag_retrieval",
     "teaching_design",
     "teaching_plan_review",
+    "artifact_revision_routing",
+    "artifact_revision_prepare",
     "ppt_generation",
     "lesson_plan_generation",
     "game_generation",
+    "ppt_revision",
+    "docx_revision",
+    "game_revision",
+    "artifact_fan_in",
 ]
 ProgressStatus = Literal["pending", "running", "success", "failed"]
 
@@ -43,9 +49,15 @@ STEP_ORDER: tuple[ProgressStepKey, ...] = (
     "rag_retrieval",
     "teaching_design",
     "teaching_plan_review",
+    "artifact_revision_routing",
+    "artifact_revision_prepare",
     "ppt_generation",
     "lesson_plan_generation",
     "game_generation",
+    "ppt_revision",
+    "docx_revision",
+    "game_revision",
+    "artifact_fan_in",
 )
 STEP_LABELS: dict[ProgressStepKey, str] = {
     "attachment_analysis": "附件分析",
@@ -63,6 +75,12 @@ STEP_LABELS: dict[ProgressStepKey, str] = {
     "ppt_generation": "生成课件",
     "lesson_plan_generation": "生成教案",
     "game_generation": "生成互动内容",
+    "artifact_revision_routing": "产物修改路由",
+    "artifact_revision_prepare": "准备修改工作区",
+    "ppt_revision": "修改课件",
+    "docx_revision": "修改教案",
+    "game_revision": "修改互动内容",
+    "artifact_fan_in": "汇总产物结果",
 }
 
 STEP_LABELS["metadata_review"] = "确认教学要素"

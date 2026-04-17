@@ -36,7 +36,6 @@ RESUMABLE_INTERRUPT_NODES = {
 APPROVAL_STAGE_BY_NODE = {
     METADATA_REVIEW_INTERRUPT_NODE: "metadata_review",
     TEACHING_PLAN_REVIEW_INTERRUPT_NODE: "teaching_plan_review",
-    ARTIFACT_REVISION_CLARIFICATION_NODE: "artifact_revision_clarification",
 }
 
 ARTIFACT_TYPE_LABELS = {
@@ -44,6 +43,16 @@ ARTIFACT_TYPE_LABELS = {
     "docx": "教案文档",
     "html-game": "互动内容",
 }
+GENERATABLE_ARTIFACT_TYPES: tuple[Literal["ppt", "docx", "html-game"], ...] = (
+    "ppt",
+    "docx",
+    "html-game",
+)
+TEACHING_PLAN_ARTIFACT_OPTIONS: tuple[dict[str, Any], ...] = (
+    {"type": "ppt", "label": "课件 PPT", "selected": True},
+    {"type": "docx", "label": "DOCX 教案", "selected": True},
+    {"type": "html-game", "label": "HTML 互动演示", "selected": True},
+)
 ARTIFACT_FEEDBACK_BY_TYPE = {
     "ppt": "modify_ppt",
     "docx": "modify_lesson_plan",
@@ -54,9 +63,25 @@ ARTIFACT_KEYWORDS: dict[str, tuple[str, ...]] = {
     "docx": ("docx", "教案", "文档", "word", "lesson plan"),
     "html-game": ("html", "互动", "游戏", "小游戏", "活动页", "网页", "activity"),
 }
-REVISION_VERBS = ("修改","调整","优化","润色","替换","更新","补充","删掉","重写","改成","改为","change","update","edit","revise","fix")
+REVISION_VERBS = (
+    "修改",
+    "调整",
+    "优化",
+    "润色",
+    "替换",
+    "更新",
+    "补充",
+    "删掉",
+    "重写",
+    "改成",
+    "改为",
+    "change",
+    "update",
+    "edit",
+    "revise",
+    "fix",
+)
 REVISION_ALL_KEYWORDS = ("全部", "都", "所有", "一起", "all", "both", "三个")
-
 
 class ConversationRoute(BaseModel):
     intent: Literal["normal_chat", "teaching_plan", "artifact_revision"] = Field(
@@ -277,17 +302,37 @@ def _pending_result_for_artifact_type(
     }
 
 
-def _generation_result_reset_update() -> dict[str, Any]:
-    return {
-        "ppt_result": _pending_result_for_artifact_type("ppt"),
-        "lesson_plan_result": _pending_result_for_artifact_type("docx"),
-        "game_result": _pending_result_for_artifact_type("html-game"),
+def _normalize_generation_targets(
+    selected_types: Sequence[str] | None,
+) -> list[Literal["ppt", "docx", "html-game"]]:
+    if selected_types is None:
+        return list(GENERATABLE_ARTIFACT_TYPES)
+    return [
+        artifact_type
+        for artifact_type in dict.fromkeys(str(item) for item in selected_types)
+        if artifact_type in GENERATABLE_ARTIFACT_TYPES
+    ]
+
+
+def _generation_result_reset_update(
+    selected_types: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    normalized_targets = _normalize_generation_targets(selected_types)
+    update: dict[str, Any] = {
+        "generation_targets": normalized_targets,
         "revision_targets": [],
         "revision_source_artifacts": [],
         "revision_results": [],
         "user_feedback": None,
         "feedback_type": None,
     }
+    if "ppt" in normalized_targets:
+        update["ppt_result"] = _pending_result_for_artifact_type("ppt")
+    if "docx" in normalized_targets:
+        update["lesson_plan_result"] = _pending_result_for_artifact_type("docx")
+    if "html-game" in normalized_targets:
+        update["game_result"] = _pending_result_for_artifact_type("html-game")
+    return update
 
 
 def _revision_result_reset_update(
@@ -318,6 +363,7 @@ def metadata_review_interrupt_node(
     state: TeachingAssistantState,
     config: Optional[RunnableConfig] = None,
 ):
+    reporter = emit_progress(config, "metadata_review", "running")
     _ = config
     user_input = interrupt(
         _build_approval_payload(
@@ -326,7 +372,11 @@ def metadata_review_interrupt_node(
         )
     )
     if _is_approve_action(user_input):
+        if reporter:
+                reporter.emit("metadata_review", "success", detail="已确认教学要素")
         return Command(goto="rag_retrieval_node")
+    if reporter:
+                reporter.emit("metadata_review", "failed", detail="教学要素待修改")
     return Command(
         update=_build_resume_message_update(user_input),
         goto="metadata_structer_node",
@@ -506,11 +556,26 @@ def teaching_plan_review_interrupt_node(
     reporter = emit_progress(config, "teaching_plan_review", "running", detail="等待教师确认教学设计")
     user_input = interrupt(_build_approval_payload("teaching_plan_review"))
     if _is_approve_action(user_input):
+        selected_types = _normalize_generation_targets(
+            user_input.get("selected_artifact_types") if isinstance(user_input, Mapping) else None
+        )
+        if not selected_types:
+            error_message = "请至少选择一个要生成的产物。"
+            if reporter:
+                reporter.emit("teaching_plan_review", "failed", detail=error_message)
+            return Command(
+                update={"messages": [AIMessage(content=error_message)]},
+                goto=END,
+            )
         if reporter:
             reporter.emit("teaching_plan_review", "success", detail="已确认教学设计")
         return Command(
-            update=_generation_result_reset_update(),
-            goto=["ppt_generate_node", "docx_generate_node", "html_game_generate_node"],
+            update=_generation_result_reset_update(selected_types),
+            goto=_clean_goto_nodes([
+                "ppt_generate_node" if "ppt" in selected_types else None,
+                "docx_generate_node" if "docx" in selected_types else None,
+                "html_game_generate_node" if "html-game" in selected_types else None,
+            ]),
         )
     return Command(
         update=_build_resume_message_update(user_input),
@@ -522,30 +587,25 @@ def artifact_revision_router_node(
     state: TeachingAssistantState,
     config: Optional[RunnableConfig] = None,
 ):
-    try:
-        reporter = emit_progress(config, "artifact_revision_routing", "running")
-        artifact_catalog = state.get("artifact_catalog") or []
-        if not artifact_catalog:
-            if reporter:
-                reporter.emit("artifact_revision_routing", "failed", detail="当前会话没有可修改的产物")
-            return Command(
-                update={
-                    "messages": [
-                        AIMessage(content="当前会话还没有可修改的产物。请先生成课件、教案或互动内容，再提出修改要求。")
-                    ]
-                },
-                goto=END,
-            )
-    except Exception as exc:
-        print(f"获取当前产物时出错：{str(exc)}")
-    try:
-        latest_message = _latest_user_message_text(state)
-        feedback_type, target_types, needs_clarification = _infer_revision_targets_from_text(
-            latest_message,
-            artifact_catalog,
+    reporter = emit_progress(config, "artifact_revision_routing", "running")
+    artifact_catalog = state.get("artifact_catalog") or []
+    if not artifact_catalog:
+        if reporter:
+            reporter.emit("artifact_revision_routing", "failed", detail="当前会话没有可修改的产物")
+        return Command(
+            update={
+                "messages": [
+                    AIMessage(content="当前会话还没有可修改的产物。请先生成课件、教案或互动内容，再提出修改要求。")
+                ]
+            },
+            goto=END,
         )
-    except Exception as exc:
-        print(f"推断修改目标时出错：{str(exc)}")
+
+    latest_message = _latest_user_message_text(state)
+    feedback_type, target_types, needs_clarification = _infer_revision_targets_from_text(
+        latest_message,
+        artifact_catalog,
+    )
 
     if needs_clarification:
         if reporter:
@@ -599,7 +659,6 @@ def artifact_revision_router_node(
         "docx": "docx_revision_node",
         "html-game": "html_game_revision_node",
     }
-    print(f"产物差量修改，路由到：{target_type}")
     return Command(update=update, goto=goto_map[target_type])
 
 
@@ -652,44 +711,44 @@ def _result_summary_line(result: Mapping[str, Any] | None) -> str | None:
     status = str(result.get("status") or "")
     if status == "ready":
         artifact_id = result.get("artifact_id")
-        return f"{label}已完成，产物 ID：{artifact_id}"
+        return f"{label}已完成，请在右侧资料去查看。产物 ID：{artifact_id}"
     if status == "failed":
         error = str(result.get("error") or "未知错误")
         return f"{label}处理失败：{error}"
     return None
 
 
-async def _artifact_fan_in_node_legacy(state: TeachingAssistantState, config: RunnableConfig | None = None):
-    reporter = emit_progress(config, "artifact_fan_in", "running")
-    summary_lines = [
-        line
-        for line in (
-            _result_summary_line(state.get("ppt_result")),
-            _result_summary_line(state.get("lesson_plan_result")),
-            _result_summary_line(state.get("game_result")),
-        )
-        if line
-    ]
-    if not summary_lines:
-        return {}
+# async def _artifact_fan_in_node_legacy(state: TeachingAssistantState, config: RunnableConfig | None = None):
+#     reporter = emit_progress(config, "artifact_fan_in", "running")
+#     summary_lines = [
+#         line
+#         for line in (
+#             _result_summary_line(state.get("ppt_result")),
+#             _result_summary_line(state.get("lesson_plan_result")),
+#             _result_summary_line(state.get("game_result")),
+#         )
+#         if line
+#     ]
+#     if not summary_lines:
+#         return {}
 
-    is_revision = bool(state.get("revision_source_artifacts"))
-    header = "产物修改结果如下：" if is_revision else "产物生成结果如下："
-    results = [
-        result
-        for result in (
-            state.get("ppt_result"),
-            state.get("lesson_plan_result"),
-            state.get("game_result"),
-        )
-        if isinstance(result, Mapping) and result.get("status") in {"ready", "failed"}
-    ]
-    if reporter:
-        reporter.emit("artifact_fan_in", "success", detail="已汇总产物处理结果")
-    return {
-        "revision_results": results,
-        "messages": [AIMessage(content=header + "\n" + "\n".join(f"- {line}" for line in summary_lines))],
-    }
+#     is_revision = bool(state.get("revision_source_artifacts"))
+#     header = "产物修改结果如下：" if is_revision else "产物生成结果如下："
+#     results = [
+#         result
+#         for result in (
+#             state.get("ppt_result"),
+#             state.get("lesson_plan_result"),
+#             state.get("game_result"),
+#         )
+#         if isinstance(result, Mapping) and result.get("status") in {"ready", "failed"}
+#     ]
+#     if reporter:
+#         reporter.emit("artifact_fan_in", "success", detail="已汇总产物处理结果")
+#     return {
+#         "revision_results": results,
+#         "messages": [AIMessage(content=header + "\n" + "\n".join(f"- {line}" for line in summary_lines))],
+#     }
 
 
 async def artifact_fan_in_node(state: TeachingAssistantState, config: RunnableConfig | None = None):
@@ -701,7 +760,7 @@ async def artifact_fan_in_node(state: TeachingAssistantState, config: RunnableCo
             for artifact in (state.get("revision_source_artifacts") or [])
         ]
     else:
-        target_types = ["ppt", "docx", "html-game"]
+        target_types = _normalize_generation_targets(state.get("generation_targets"))
 
     results = [
         state.get(result_key)

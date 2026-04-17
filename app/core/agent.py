@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import traceback
 import zipfile
 from collections.abc import AsyncIterator
 from contextlib import suppress
@@ -833,12 +834,13 @@ class AgentRuntime:
         state_snapshot = await self._get_thread_state_snapshot(thread_id)
         if await self._should_resume_thread(thread_id):
             if approval:
-                return Command(
-                    resume={
-                        "action": approval["action"],
-                        "interrupt_id": approval["interrupt_id"],
-                    }
-                )
+                resume_payload = {
+                    "action": approval["action"],
+                    "interrupt_id": approval["interrupt_id"],
+                }
+                if approval.get("selected_artifact_types") is not None:
+                    resume_payload["selected_artifact_types"] = approval["selected_artifact_types"]
+                return Command(resume=resume_payload)
             if attachment_text:
                 return Command(
                     resume={
@@ -1606,6 +1608,8 @@ class AgentRuntime:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                print(f"[stream_agent_events] unhandled exception: {exc!r}")
+                traceback.print_exc()
                 await event_queue.put(
                     {
                         "event": "error",

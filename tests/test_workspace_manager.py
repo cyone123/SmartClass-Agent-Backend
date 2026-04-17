@@ -5,7 +5,7 @@ from subprocess import CompletedProcess
 
 import pytest
 
-from app.core.progress import emit_progress
+from app.core.progress import ProgressTracker, emit_progress
 from app.core.workspace import (
     LocalSubprocessExecutionBackend,
     WorkspaceManager,
@@ -121,6 +121,22 @@ def test_emit_progress_is_silent_without_registered_reporter(capsys: pytest.Capt
     assert emitted is None
     assert captured.out == ""
     assert captured.err == ""
+
+
+def test_progress_tracker_accepts_revision_step_keys() -> None:
+    tracker = ProgressTracker(run_id="run-1")
+
+    payload = tracker.update(
+        "artifact_revision_routing",
+        "running",
+        detail="Routing artifact revision request",
+    )
+    tracker.update("artifact_revision_prepare", "success", detail="Workspace ready")
+    tracker.update("ppt_revision", "success", detail="PPT updated")
+    tracker.update("artifact_fan_in", "success", detail="Revision summary ready")
+
+    step_keys = [step["step_key"] for step in payload["steps"]]
+    assert "artifact_revision_routing" in step_keys
 
 
 def test_workspace_backend_decodes_non_utf8_process_output(
