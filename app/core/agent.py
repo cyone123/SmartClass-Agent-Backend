@@ -34,7 +34,12 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
 
 from app.config import get_backend_root
-from app.core.graph import build_agent_graph, build_input_messages
+from app.core.graph import (
+    RESUMABLE_INTERRUPT_NODES,
+    build_agent_graph,
+    build_input_messages,
+    get_pending_approval_payload,
+)
 from app.core.llm import get_model, get_small_model
 from app.core.progress import (
     ProgressReporter,
@@ -54,7 +59,6 @@ from app.services import artifact_service, file_service
 ArtifactType = Literal["ppt", "docx", "html-game"]
 ArtifactEventEmitter = Callable[[dict[str, Any]], None]
 
-INTERRUPT_FOR_USERINPUT_NODE = "interrupt_for_userinput"
 ROOT_STREAMING_NODES = {"normal_chat_node", "follow_up_questioner", "teaching_design_planner"}
 SUGGESTION_COUNT = 3
 SUGGESTION_CONTEXT_WINDOW = 6
@@ -742,13 +746,41 @@ class AgentRuntime:
                 self._thread_locks[thread_id] = lock
             return lock
 
-    async def _should_resume_thread(self, thread_id: str | None) -> bool:
+    async def _get_thread_state_snapshot(self, thread_id: str | None):
         if not thread_id:
-            return False
-        state_snapshot = await self.streaming_graph.aget_state(get_thread_config(thread_id))
-        interrupts = getattr(state_snapshot, "interrupts", ()) or ()
+            return None
+        return await self.streaming_graph.aget_state(get_thread_config(thread_id))
+
+    def _has_resumable_interrupt(self, state_snapshot: Any) -> bool:
+        interrupts = tuple(getattr(state_snapshot, "interrupts", ()) or ())
         next_nodes = tuple(getattr(state_snapshot, "next", ()) or ())
-        return bool(interrupts) and INTERRUPT_FOR_USERINPUT_NODE in next_nodes
+        return bool(interrupts) and any(node in RESUMABLE_INTERRUPT_NODES for node in next_nodes)
+
+    def _get_pending_approval_from_snapshot(self, state_snapshot: Any) -> dict[str, Any] | None:
+        interrupts = getattr(state_snapshot, "interrupts", ()) or ()
+        next_nodes = getattr(state_snapshot, "next", ()) or ()
+        return get_pending_approval_payload(interrupts, next_nodes)
+
+    async def _should_resume_thread(self, thread_id: str | None) -> bool:
+        state_snapshot = await self._get_thread_state_snapshot(thread_id)
+        if state_snapshot is None:
+            return False
+        return self._has_resumable_interrupt(state_snapshot)
+
+    async def get_pending_approval(self, thread_id: str | None) -> dict[str, Any] | None:
+        state_snapshot = await self._get_thread_state_snapshot(thread_id)
+        if state_snapshot is None:
+            return None
+        return self._get_pending_approval_from_snapshot(state_snapshot)
+
+    async def validate_approval_request(self, thread_id: str | None, interrupt_id: str) -> None:
+        if not thread_id:
+            raise ValueError("thread_id is required for approval actions.")
+        approval = await self.get_pending_approval(thread_id)
+        if approval is None:
+            raise ValueError("No pending approval found for this thread.")
+        if approval.get("interrupt_id") != interrupt_id:
+            raise ValueError("Approval request is stale. Please refresh and try again.")
 
     async def _get_graph_input_with_plan(
         self,
@@ -758,8 +790,16 @@ class AgentRuntime:
         plan_id: int | None,
         attachment_text: str | None = None,
         attachment_paths: list[str] | None = None,
+        approval: dict[str, Any] | None = None,
     ):
         if await self._should_resume_thread(thread_id):
+            if approval:
+                return Command(
+                    resume={
+                        "action": approval["action"],
+                        "interrupt_id": approval["interrupt_id"],
+                    }
+                )
             if attachment_text:
                 return Command(
                     resume={
@@ -769,6 +809,9 @@ class AgentRuntime:
                     }
                 )
             return Command(resume=message)
+
+        if approval:
+            raise ValueError("No pending interrupt found for approval request.")
 
         graph_input: dict[str, Any] = {
             "messages": build_input_messages(message, attachment_text, attachment_paths),
@@ -1147,6 +1190,7 @@ class AgentRuntime:
         run_id: str,
         plan_id: int | None = None,
         attachments: list[AttachmentFile] | None = None,
+        approval: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         graph_thread_id = thread_id or run_id
         lock = await self._get_thread_lock(graph_thread_id)
@@ -1198,6 +1242,7 @@ class AgentRuntime:
                         plan_id=plan_id,
                         attachment_text=attachment_text,
                         attachment_paths=attachment_paths,
+                        approval=approval,
                     )
                     print("==============图的输入=========:")
                     print(f"{graph_input}")
@@ -1240,12 +1285,23 @@ class AgentRuntime:
                                 }
                             )
 
-                    if not received_text_chunk:
+                    pending_approval = await self.get_pending_approval(graph_thread_id)
+                    if pending_approval:
+                        approval_payload = dict(pending_approval)
+                        approval_payload["run_id"] = run_id
+                        await event_queue.put(
+                            {
+                                "event": "approval",
+                                "data": approval_payload,
+                            }
+                        )
+
+                    if not received_text_chunk and not pending_approval:
                         print(
                             "[stream_agent_events] completed without any text chunks. "
                             "This usually means nested model calls did not propagate streaming callbacks."
                         )
-                    elif graph_thread_id:
+                    elif graph_thread_id and not pending_approval:
                         suggestions = await self._generate_follow_up_suggestions(graph_thread_id)
                         if suggestions:
                             await event_queue.put(

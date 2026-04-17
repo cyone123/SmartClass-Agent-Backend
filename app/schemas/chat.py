@@ -1,17 +1,37 @@
-from typing import Optional
+from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field, model_validator
+
+
+class ApprovalActionRequest(BaseModel):
+    action: Literal["approve"] = Field(..., description="Approval action")
+    interrupt_id: str = Field(..., min_length=1, description="Pending interrupt id")
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(..., description="用户输入的消息")
-    thread_id: Optional[str] = Field(None, description="会话ID，用于多轮对话")
+    message: Optional[str] = Field(None, description="User input message")
+    thread_id: Optional[str] = Field(None, description="Conversation thread id")
     attachment_ids: Optional[list[int]] = Field(
         default=None,
-        description="当前会话可用的附件ID列表",
+        description="Attachment ids for the current message",
     )
-    temperature: Optional[float] = Field(0.7, description="温度参数")
-    stream: Optional[bool] = Field(False, description="是否流式输出")
+    approval: Optional[ApprovalActionRequest] = Field(
+        default=None,
+        description="Approval action payload for resuming an approval interrupt",
+    )
+    temperature: Optional[float] = Field(0.7, description="Sampling temperature")
+    stream: Optional[bool] = Field(False, description="Whether to stream the response")
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> "ChatRequest":
+        has_message = bool((self.message or "").strip())
+        if self.approval is None and not has_message:
+            raise ValueError("message is required when approval is not provided.")
+        if self.approval is not None and not self.thread_id:
+            raise ValueError("thread_id is required when approval is provided.")
+        return self
 
 
 class ChatResponse(BaseModel):

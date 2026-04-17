@@ -18,8 +18,10 @@ ProgressStepKey = Literal[
     "code_execution",
     "intent_recognition",
     "metadata_structuring",
+    "metadata_review",
     "rag_retrieval",
     "teaching_design",
+    "teaching_plan_review",
     "ppt_generation",
     "lesson_plan_generation",
     "game_generation",
@@ -37,8 +39,10 @@ STEP_ORDER: tuple[ProgressStepKey, ...] = (
     "code_execution",
     "intent_recognition",
     "metadata_structuring",
+    "metadata_review",
     "rag_retrieval",
     "teaching_design",
+    "teaching_plan_review",
     "ppt_generation",
     "lesson_plan_generation",
     "game_generation",
@@ -60,6 +64,9 @@ STEP_LABELS: dict[ProgressStepKey, str] = {
     "lesson_plan_generation": "生成教案",
     "game_generation": "生成互动内容",
 }
+
+STEP_LABELS["metadata_review"] = "确认教学要素"
+STEP_LABELS["teaching_plan_review"] = "确认教学计划"
 
 
 class ProgressStep(TypedDict, total=False):

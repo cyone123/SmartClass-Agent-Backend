@@ -1,0 +1,1353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>牛顿第一定律 - 斜面小车实验探究</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Microsoft YaHei', 'SimHei', sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100vh;
+            color: #fff;
+            overflow-x: hidden;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        header {
+            text-align: center;
+            padding: 20px 0 30px;
+        }
+        
+        h1 {
+            font-size: 2.5em;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+            text-shadow: 0 0 30px rgba(0, 212, 255, 0.3);
+        }
+        
+        .subtitle {
+            color: #8892b0;
+            font-size: 1.1em;
+        }
+        
+        .experiment-area {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        @media (max-width: 900px) {
+            .experiment-area {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .canvas-container {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+        }
+        
+        #experimentCanvas {
+            width: 100%;
+            height: 400px;
+            background: linear-gradient(180deg, #0a0a1a 0%, #1a1a3a 100%);
+            border-radius: 15px;
+            display: block;
+        }
+        
+        .controls {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            padding: 25px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .control-section {
+            margin-bottom: 25px;
+        }
+        
+        .control-section h3 {
+            color: #00d4ff;
+            margin-bottom: 15px;
+            font-size: 1.1em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .control-section h3::before {
+            content: '▸';
+            color: #7b2cbf;
+        }
+        
+        .surface-options {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        .surface-btn {
+            padding: 15px 20px;
+            border: 2px solid transparent;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 1em;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .surface-btn.towel {
+            background: linear-gradient(135deg, #ff6b6b, #c92a2a);
+        }
+        
+        .surface-btn.cloth {
+            background: linear-gradient(135deg, #ffd43b, #fab005);
+            color: #1a1a2e;
+        }
+        
+        .surface-btn.wood {
+            background: linear-gradient(135deg, #69db7c, #2f9e44);
+        }
+        
+        .surface-btn.ideal {
+            background: linear-gradient(135deg, #748ffc, #4c6ef5);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .surface-btn.ideal::after {
+            content: '✨';
+            position: absolute;
+            right: 15px;
+        }
+        
+        .surface-btn:hover {
+            transform: translateX(5px);
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        .surface-btn.active {
+            border-color: #fff;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+        }
+        
+        .friction-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+            padding: 10px 15px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+        }
+        
+        .friction-bar {
+            flex: 1;
+            height: 10px;
+            background: #333;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        
+        .friction-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00d4ff, #ff6b6b);
+            transition: width 0.5s ease;
+            border-radius: 5px;
+        }
+        
+        .start-btn {
+            width: 100%;
+            padding: 18px;
+            font-size: 1.2em;
+            font-weight: bold;
+            border: none;
+            border-radius: 15px;
+            cursor: pointer;
+            background: linear-gradient(135deg, #00d4ff, #7b2cbf);
+            color: white;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        
+        .start-btn:hover:not(:disabled) {
+            transform: scale(1.02);
+            box-shadow: 0 10px 30px rgba(0, 212, 255, 0.4);
+        }
+        
+        .start-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .data-panel {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 12px;
+        }
+        
+        .data-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .data-row:last-child {
+            border-bottom: none;
+        }
+        
+        .data-label {
+            color: #8892b0;
+        }
+        
+        .data-value {
+            font-weight: bold;
+            color: #00d4ff;
+        }
+        
+        .knowledge-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .knowledge-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            padding: 25px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: transform 0.3s ease;
+        }
+        
+        .knowledge-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .knowledge-card h3 {
+            color: #ffd43b;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        
+        .knowledge-card p {
+            color: #ccd6f6;
+            line-height: 1.8;
+        }
+        
+        .law-display {
+            background: linear-gradient(135deg, rgba(123, 44, 191, 0.3), rgba(0, 212, 255, 0.2));
+            border-radius: 20px;
+            padding: 30px;
+            text-align: center;
+            margin-bottom: 30px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .law-display h2 {
+            color: #ffd43b;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+        
+        .law-content {
+            font-size: 1.3em;
+            line-height: 2;
+            color: #fff;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+        }
+        
+        .law-content .highlight {
+            color: #00d4ff;
+            font-weight: bold;
+        }
+        
+        .quiz-section {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            padding: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .quiz-section h3 {
+            color: #ff6b6b;
+            margin-bottom: 20px;
+            font-size: 1.4em;
+        }
+        
+        .quiz-question {
+            margin-bottom: 25px;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 15px;
+        }
+        
+        .quiz-question p {
+            margin-bottom: 15px;
+            color: #ccd6f6;
+        }
+        
+        .quiz-options {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        .quiz-option {
+            padding: 12px 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: #fff;
+            text-align: left;
+        }
+        
+        .quiz-option:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: #00d4ff;
+        }
+        
+        .quiz-option.correct {
+            background: rgba(46, 160, 67, 0.3);
+            border-color: #2ea043;
+        }
+        
+        .quiz-option.wrong {
+            background: rgba(248, 81, 73, 0.3);
+            border-color: #f85149;
+        }
+        
+        .quiz-feedback {
+            margin-top: 15px;
+            padding: 15px;
+            border-radius: 10px;
+            display: none;
+        }
+        
+        .quiz-feedback.show {
+            display: block;
+        }
+        
+        .quiz-feedback.correct {
+            background: rgba(46, 160, 67, 0.2);
+            color: #7ee787;
+        }
+        
+        .quiz-feedback.wrong {
+            background: rgba(248, 81, 73, 0.2);
+            color: #fdaeb7;
+        }
+        
+        .history-timeline {
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin: 30px 0;
+        }
+        
+        .timeline-item {
+            text-align: center;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            flex: 1;
+            min-width: 200px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .timeline-item .scientist {
+            font-size: 1.3em;
+            color: #ffd43b;
+            margin-bottom: 10px;
+        }
+        
+        .timeline-item .era {
+            color: #8892b0;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+        }
+        
+        .timeline-item .view {
+            color: #ccd6f6;
+            font-size: 0.95em;
+        }
+        
+        .correct-view {
+            color: #7ee787 !important;
+        }
+        
+        .wrong-view {
+            color: #fdaeb7 !important;
+        }
+        
+        .inertia-demo {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            padding: 30px;
+            margin: 30px 0;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .inertia-demo h3 {
+            color: #00d4ff;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        #inertiaCanvas {
+            width: 100%;
+            max-width: 600px;
+            height: 300px;
+            background: #0a0a1a;
+            border-radius: 15px;
+            display: block;
+            margin: 0 auto;
+        }
+        
+        .inertia-controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .inertia-btn {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        
+        .inertia-btn:hover {
+            transform: scale(1.05);
+        }
+        
+        .inertia-btn.start {
+            background: linear-gradient(135deg, #69db7c, #2f9e44);
+            color: white;
+        }
+        
+        .inertia-btn.reset {
+            background: linear-gradient(135deg, #868e96, #495057);
+            color: white;
+        }
+        
+        .inertia-explanation {
+            margin-top: 20px;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            text-align: center;
+            color: #ccd6f6;
+            line-height: 1.8;
+        }
+        
+        footer {
+            text-align: center;
+            padding: 30px;
+            color: #8892b0;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            margin-top: 40px;
+        }
+        
+        .result-display {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.95);
+            padding: 40px 60px;
+            border-radius: 20px;
+            border: 2px solid #00d4ff;
+            text-align: center;
+            z-index: 1000;
+            display: none;
+            box-shadow: 0 0 50px rgba(0, 212, 255, 0.5);
+        }
+        
+        .result-display.show {
+            display: block;
+            animation: popIn 0.3s ease;
+        }
+        
+        @keyframes popIn {
+            from {
+                opacity: 0;
+                transform: translate(-50%, -50%) scale(0.8);
+            }
+            to {
+                opacity: 1;
+                transform: translate(-50%, -50%) scale(1);
+            }
+        }
+        
+        .result-display h2 {
+            color: #ffd43b;
+            margin-bottom: 20px;
+        }
+        
+        .result-display p {
+            color: #ccd6f6;
+            margin-bottom: 20px;
+            line-height: 1.8;
+        }
+        
+        .close-btn {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #00d4ff, #7b2cbf);
+            border: none;
+            border-radius: 10px;
+            color: white;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: bold;
+        }
+        
+        .step-indicator {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        
+        .step {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #8892b0;
+            font-weight: bold;
+        }
+        
+        .step.active {
+            background: linear-gradient(135deg, #00d4ff, #7b2cbf);
+            color: white;
+        }
+        
+        .step.completed {
+            background: #2ea043;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 牛顿第一定律 - 斜面小车实验</h1>
+            <p class="subtitle">通过实验探究，理解力与运动的关系</p>
+        </header>
+        
+        <!-- 历史背景 -->
+        <section class="history-timeline">
+            <div class="timeline-item">
+                <div class="scientist">亚里士多德</div>
+                <div class="era">古希腊 (公元前384-322)</div>
+                <div class="view wrong-view">❌ 力是维持运动的原因</div>
+            </div>
+            <div class="timeline-item">
+                <div class="scientist">伽利略</div>
+                <div class="era">意大利 (1564-1642)</div>
+                <div class="view correct-view">✓ 力是改变运动状态的原因</div>
+            </div>
+            <div class="timeline-item">
+                <div class="scientist">牛顿</div>
+                <div class="era">英国 (1643-1727)</div>
+                <div class="view correct-view">✓ 总结出第一定律</div>
+            </div>
+        </section>
+        
+        <!-- 实验区域 -->
+        <div class="experiment-area">
+            <div class="canvas-container">
+                <canvas id="experimentCanvas"></canvas>
+                <div class="step-indicator">
+                    <div class="step" id="step1">1</div>
+                    <div class="step" id="step2">2</div>
+                    <div class="step" id="step3">3</div>
+                </div>
+            </div>
+            
+            <div class="controls">
+                <div class="control-section">
+                    <h3>选择接触面</h3>
+                    <div class="surface-options">
+                        <button class="surface-btn towel active" data-surface="towel" data-friction="0.8">
+                            🧣 毛巾表面 (粗糙)
+                        </button>
+                        <button class="surface-btn cloth" data-surface="cloth" data-friction="0.5">
+                            🧵 棉布表面 (较粗糙)
+                        </button>
+                        <button class="surface-btn wood" data-surface="wood" data-friction="0.2">
+                            🪵 木板表面 (光滑)
+                        </button>
+                        <button class="surface-btn ideal" data-surface="ideal" data-friction="0">
+                            ✨ 理想光滑面 (无摩擦)
+                        </button>
+                    </div>
+                    
+                    <div class="friction-indicator">
+                        <span>摩擦力:</span>
+                        <div class="friction-bar">
+                            <div class="friction-fill" id="frictionFill" style="width: 80%;"></div>
+                        </div>
+                        <span id="frictionValue">大</span>
+                    </div>
+                </div>
+                
+                <div class="control-section">
+                    <h3>实验操作</h3>
+                    <button class="start-btn" id="startBtn">🎯 开始实验</button>
+                </div>
+                
+                <div class="data-panel">
+                    <div class="data-row">
+                        <span class="data-label">当前表面:</span>
+                        <span class="data-value" id="currentSurface">毛巾</span>
+                    </div>
+                    <div class="data-row">
+                        <span class="data-label">滑行距离:</span>
+                        <span class="data-value" id="distance">-- cm</span>
+                    </div>
+                    <div class="data-row">
+                        <span class="data-label">速度变化:</span>
+                        <span class="data-value" id="speedChange">--</span>
+                    </div>
+                    <div class="data-row">
+                        <span class="data-label">实验结论:</span>
+                        <span class="data-value" id="conclusion">--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 实验结论弹出框 -->
+        <div class="result-display" id="resultDisplay">
+            <h2 id="resultTitle">🎉 实验结果</h2>
+            <p id="resultText"></p>
+            <button class="close-btn" onclick="closeResult()">我知道了</button>
+        </div>
+        
+        <!-- 牛顿第一定律 -->
+        <div class="law-display">
+            <h2>📜 牛顿第一定律</h2>
+            <div class="law-content">
+                <span class="highlight">一切物体</span>在<span class="highlight">没有受到外力作用</span>时，<br>
+                总保持<span class="highlight">静止状态</span>或<span class="highlight">匀速直线运动状态</span>。
+            </div>
+        </div>
+        
+        <!-- 知识点卡片 -->
+        <div class="knowledge-section">
+            <div class="knowledge-card">
+                <h3>🔬 实验方法</h3>
+                <p>
+                    <strong>控制变量法：</strong>让小车从斜面同一高度滑下，确保到达底端时速度相同。<br><br>
+                    <strong>科学推理法：</strong>在实验基础上，通过逻辑推理得出理想情况下的结论。
+                </p>
+            </div>
+            <div class="knowledge-card">
+                <h3>💡 实验结论</h3>
+                <p>
+                    ① 阻力越小，小车滑行距离越远<br>
+                    ② 阻力越小，速度减小越慢<br>
+                    ③ 若无阻力，小车将永远运动下去
+                </p>
+            </div>
+            <div class="knowledge-card">
+                <h3>🎯 关键理解</h3>
+                <p>
+                    力不是维持运动的原因，而是改变运动状态的原因。物体本身具有保持原有运动状态的性质——惯性。
+                </p>
+            </div>
+        </div>
+        
+        <!-- 惯性演示 -->
+        <div class="inertia-demo">
+            <h3>🚗 惯性现象演示 - 汽车急刹车</h3>
+            <canvas id="inertiaCanvas"></canvas>
+            <div class="inertia-controls">
+                <button class="inertia-btn start" id="inertiaStart">▶ 开始演示</button>
+                <button class="inertia-btn reset" id="inertiaReset">🔄 重置</button>
+            </div>
+            <div class="inertia-explanation" id="inertiaExplanation">
+                点击"开始演示"观察汽车急刹车时乘客的状态变化
+            </div>
+        </div>
+        
+        <!-- 课堂测验 -->
+        <div class="quiz-section">
+            <h3>📝 课堂测验 - 检验你的理解</h3>
+            
+            <div class="quiz-question" data-question="1">
+                <p><strong>问题1：</strong>牛顿第一定律是通过什么方法得出的？</p>
+                <div class="quiz-options">
+                    <button class="quiz-option" data-answer="A">A. 直接实验测量</button>
+                    <button class="quiz-option" data-answer="B">B. 实验与科学推理相结合</button>
+                    <button class="quiz-option" data-answer="C">C. 纯理论推导</button>
+                    <button class="quiz-option" data-answer="D">D. 生活经验总结</button>
+                </div>
+                <div class="quiz-feedback"></div>
+            </div>
+            
+            <div class="quiz-question" data-question="2">
+                <p><strong>问题2：</strong>关于惯性，下列说法正确的是？</p>
+                <div class="quiz-options">
+                    <button class="quiz-option" data-answer="A">A. 物体运动越快，惯性越大</button>
+                    <button class="quiz-option" data-answer="B">B. 静止的物体没有惯性</button>
+                    <button class="quiz-option" data-answer="C">C. 惯性大小只与质量有关</button>
+                    <button class="quiz-option" data-answer="D">D. 物体受力越大，惯性越大</button>
+                </div>
+                <div class="quiz-feedback"></div>
+            </div>
+            
+            <div class="quiz-question" data-question="3">
+                <p><strong>问题3：</strong>锤头松了，把锤柄在地上撞几下就紧了，这是为什么？</p>
+                <div class="quiz-options">
+                    <button class="quiz-option" data-answer="A">A. 锤头受重力作用向下运动</button>
+                    <button class="quiz-option" data-answer="B">B. 锤柄停止运动，锤头因惯性继续向下运动套紧</button>
+                    <button class="quiz-option" data-answer="C">C. 锤头受到撞击力变紧</button>
+                    <button class="quiz-option" data-answer="D">D. 锤柄变短了</button>
+                </div>
+                <div class="quiz-feedback"></div>
+            </div>
+        </div>
+        
+        <footer>
+            <p>📚 牛顿第一定律 - 初三物理 | 实验探究法教学</p>
+            <p style="margin-top: 10px; font-size: 0.9em;">实验器材：斜面、小车、毛巾、棉布、木板</p>
+        </footer>
+    </div>
+    
+    <script>
+        // ========== 斜面小车实验 ==========
+        const canvas = document.getElementById('experimentCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // 设置canvas实际尺寸
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth - 40;
+            canvas.height = 400;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        
+        // 实验参数
+        let currentSurface = 'towel';
+        let currentFriction = 0.8;
+        let cartX = 0;
+        let cartY = 0;
+        let cartVelocity = 0;
+        let isRunning = false;
+        let animationId = null;
+        let phase = 'ready'; // ready, sliding, rolling, done
+        let slideDistance = 0;
+        
+        // 表面颜色和纹理
+        const surfaceColors = {
+            towel: { color: '#c92a2a', pattern: '粗糙', name: '毛巾' },
+            cloth: { color: '#fab005', pattern: '较粗糙', name: '棉布' },
+            wood: { color: '#2f9e44', pattern: '光滑', name: '木板' },
+            ideal: { color: '#4c6ef5', pattern: '理想', name: '理想光滑面' }
+        };
+        
+        // 绘制场景
+        function drawScene() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            const groundY = canvas.height - 80;
+            const rampHeight = 150;
+            const rampLength = 200;
+            const rampStartX = 50;
+            
+            // 绘制斜面
+            ctx.beginPath();
+            ctx.moveTo(rampStartX, groundY);
+            ctx.lineTo(rampStartX + rampLength, groundY - rampHeight);
+            ctx.lineTo(rampStartX + rampLength, groundY);
+            ctx.closePath();
+            ctx.fillStyle = '#8b7355';
+            ctx.fill();
+            ctx.strokeStyle = '#5d4e37';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            // 绘制斜面刻度
+            ctx.fillStyle = '#fff';
+            ctx.font = '12px Arial';
+            for (let i = 0; i <= 5; i++) {
+                const y = groundY - (i * rampHeight / 5);
+                ctx.fillText(i * 20 + 'cm', rampStartX - 35, y + 4);
+                ctx.beginPath();
+                ctx.moveTo(rampStartX - 10, y);
+                ctx.lineTo(rampStartX, y);
+                ctx.strokeStyle = '#aaa';
+                ctx.stroke();
+            }
+            
+            // 绘制地面（水平轨道）
+            const groundStartX = rampStartX + rampLength;
+            const groundEndX = canvas.width - 50;
+            
+            // 绘制表面纹理
+            ctx.fillStyle = surfaceColors[currentSurface].color;
+            ctx.fillRect(groundStartX, groundY - 5, groundEndX - groundStartX, 15);
+            
+            // 绘制纹理线条
+            ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+            ctx.lineWidth = 1;
+            if (currentSurface === 'towel') {
+                for (let i = groundStartX; i < groundEndX; i += 8) {
+                    ctx.beginPath();
+                    ctx.moveTo(i, groundY - 5);
+                    ctx.lineTo(i + 4, groundY + 10);
+                    ctx.stroke();
+                }
+            } else if (currentSurface === 'cloth') {
+                for (let i = groundStartX; i < groundEndX; i += 15) {
+                    ctx.beginPath();
+                    ctx.moveTo(i, groundY - 5);
+                    ctx.lineTo(i, groundY + 10);
+                    ctx.stroke();
+                }
+            } else if (currentSurface === 'wood') {
+                for (let i = groundStartX; i < groundEndX; i += 30) {
+                    ctx.beginPath();
+                    ctx.moveTo(i, groundY - 5);
+                    ctx.lineTo(i, groundY + 10);
+                    ctx.stroke();
+                }
+            }
+            
+            // 绘制刻度尺
+            ctx.fillStyle = '#fff';
+            ctx.font = '10px Arial';
+            for (let i = 0; i <= (groundEndX - groundStartX); i += 50) {
+                const x = groundStartX + i;
+                ctx.fillText(i + 'cm', x, groundY + 30);
+                ctx.beginPath();
+                ctx.moveTo(x, groundY + 10);
+                ctx.lineTo(x, groundY + 15);
+                ctx.strokeStyle = '#fff';
+                ctx.stroke();
+            }
+            
+            // 计算小车位置
+            let cartDrawX, cartDrawY;
+            
+            if (phase === 'ready') {
+                // 小车在斜面顶端
+                cartDrawX = rampStartX + rampLength - 30;
+                cartDrawY = groundY - rampHeight - 15;
+            } else if (phase === 'sliding') {
+                // 小车在斜面上滑行
+                const progress = cartX / rampLength;
+                cartDrawX = rampStartX + cartX - 30;
+                cartDrawY = groundY - rampHeight + progress * rampHeight - 15;
+            } else {
+                // 小车在水平面上
+                cartDrawX = groundStartX + cartX - 30;
+                cartDrawY = groundY - 25;
+            }
+            
+            // 绘制小车
+            drawCart(cartDrawX, cartDrawY);
+            
+            // 绘制速度箭头
+            if (cartVelocity > 0.1) {
+                ctx.beginPath();
+                ctx.moveTo(cartDrawX + 60, cartDrawY + 5);
+                ctx.lineTo(cartDrawX + 60 + cartVelocity * 30, cartDrawY + 5);
+                ctx.strokeStyle = '#00d4ff';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+                
+                // 箭头头部
+                ctx.beginPath();
+                ctx.moveTo(cartDrawX + 60 + cartVelocity * 30, cartDrawY + 5);
+                ctx.lineTo(cartDrawX + 50 + cartVelocity * 30, cartDrawY);
+                ctx.lineTo(cartDrawX + 50 + cartVelocity * 30, cartDrawY + 10);
+                ctx.closePath();
+                ctx.fillStyle = '#00d4ff';
+                ctx.fill();
+            }
+            
+            // 绘制摩擦力箭头
+            if (phase === 'rolling' && currentFriction > 0) {
+                ctx.beginPath();
+                ctx.moveTo(cartDrawX, cartDrawY + 20);
+                ctx.lineTo(cartDrawX - currentFriction * 30, cartDrawY + 20);
+                ctx.strokeStyle = '#ff6b6b';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.fillStyle = '#ff6b6b';
+                ctx.font = '12px Arial';
+                ctx.fillText('f', cartDrawX - currentFriction * 30 - 15, cartDrawY + 25);
+            }
+            
+            // 绘制提示文字
+            ctx.fillStyle = '#ffd43b';
+            ctx.font = '14px Arial';
+            ctx.fillText('表面: ' + surfaceColors[currentSurface].name + ' (' + surfaceColors[currentSurface].pattern + ')', 20, 30);
+            
+            if (phase === 'ready') {
+                ctx.fillStyle = '#00d4ff';
+                ctx.font = '16px Arial';
+                ctx.fillText('点击"开始实验"观察小车运动', canvas.width / 2 - 100, 60);
+            }
+        }
+        
+        // 绘制小车
+        function drawCart(x, y) {
+            // 车身
+            ctx.fillStyle = '#3498db';
+            ctx.fillRect(x, y, 60, 20);
+            
+            // 车轮
+            ctx.fillStyle = '#2c3e50';
+            ctx.beginPath();
+            ctx.arc(x + 15, y + 25, 8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x + 45, y + 25, 8, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // 轮毂
+            ctx.fillStyle = '#7f8c8d';
+            ctx.beginPath();
+            ctx.arc(x + 15, y + 25, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(x + 45, y + 25, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // 开始实验
+        function startExperiment() {
+            if (isRunning) return;
+            
+            isRunning = true;
+            phase = 'sliding';
+            cartX = 0;
+            cartVelocity = 0;
+            slideDistance = 0;
+            
+            document.getElementById('startBtn').disabled = true;
+            updateSteps(1);
+            
+            // 斜面滑下阶段
+            slideDown();
+        }
+        
+        // 斜面滑下动画
+        function slideDown() {
+            const rampLength = 200;
+            const gravity = 0.3;
+            
+            function animateSlide() {
+                cartX += 3;
+                cartVelocity += gravity * 0.1;
+                
+                if (cartX >= rampLength) {
+                    cartX = 0;
+                    cartVelocity = 5; // 到达底端的初始速度
+                    phase = 'rolling';
+                    updateSteps(2);
+                    rollOnSurface();
+                } else {
+                    drawScene();
+                    animationId = requestAnimationFrame(animateSlide);
+                }
+            }
+            animateSlide();
+        }
+        
+        // 水平面滚动动画
+        function rollOnSurface() {
+            const groundStartX = 250;
+            const maxDistance = canvas.width - 300;
+            
+            function animateRoll() {
+                // 根据摩擦力减速
+                const deceleration = currentFriction * 0.05;
+                cartVelocity = Math.max(0, cartVelocity - deceleration);
+                cartX += cartVelocity;
+                slideDistance = cartX;
+                
+                // 更新数据显示
+                document.getElementById('distance').textContent = Math.round(slideDistance) + ' cm';
+                document.getElementById('speedChange').textContent = currentFriction > 0 ? '减速中' : '保持不变';
+                
+                // 绘制场景
+                drawScene();
+                
+                // 检查是否停止或到达边界
+                if (cartVelocity <= 0.01 || cartX >= maxDistance) {
+                    endExperiment();
+                } else {
+                    animationId = requestAnimationFrame(animateRoll);
+                }
+            }
+            animateRoll();
+        }
+        
+        // 结束实验
+        function endExperiment() {
+            isRunning = false;
+            phase = 'done';
+            updateSteps(3);
+            document.getElementById('startBtn').disabled = false;
+            
+            // 显示结果
+            showResult();
+        }
+        
+        // 显示结果
+        function showResult() {
+            const resultDisplay = document.getElementById('resultDisplay');
+            const resultTitle = document.getElementById('resultTitle');
+            const resultText = document.getElementById('resultText');
+            const conclusion = document.getElementById('conclusion');
+            
+            let title, text, conclusionText;
+            
+            if (currentSurface === 'towel') {
+                title = '🧣 毛巾表面实验结果';
+                text = `小车在粗糙的毛巾表面滑行了 <strong>${Math.round(slideDistance)} cm</strong>。<br><br>
+                        由于摩擦力较大，小车速度减小很快，滑行距离较短。`;
+                conclusionText = '阻力大，距离短';
+            } else if (currentSurface === 'cloth') {
+                title = '🧵 棉布表面实验结果';
+                text = `小车在棉布表面滑行了 <strong>${Math.round(slideDistance)} cm</strong>。<br><br>
+                        摩擦力比毛巾小，小车滑行距离更远。`;
+                conclusionText = '阻力较小，距离较长';
+            } else if (currentSurface === 'wood') {
+                title = '🪵 木板表面实验结果';
+                text = `小车在光滑的木板表面滑行了 <strong>${Math.round(slideDistance)} cm</strong>。<br><br>
+                        摩擦力较小，小车速度减小较慢，滑行距离很远。`;
+                conclusionText = '阻力小，距离远';
+            } else {
+                title = '✨ 理想光滑面实验结果';
+                text = `在理想的<strong>无摩擦</strong>表面上，小车将<strong>永远运动下去</strong>！<br><br>
+                        这说明：如果没有外力作用，运动物体将保持匀速直线运动状态。<br><br>
+                        <strong>这就是牛顿第一定律的核心思想！</strong>`;
+                conclusionText = '无阻力，永远运动';
+            }
+            
+            resultTitle.textContent = title;
+            resultText.innerHTML = text;
+            conclusion.textContent = conclusionText;
+            resultDisplay.classList.add('show');
+        }
+        
+        // 关闭结果弹窗
+        function closeResult() {
+            document.getElementById('resultDisplay').classList.remove('show');
+        }
+        
+        // 更新步骤指示器
+        function updateSteps(step) {
+            for (let i = 1; i <= 3; i++) {
+                const el = document.getElementById('step' + i);
+                el.classList.remove('active', 'completed');
+                if (i < step) el.classList.add('completed');
+                if (i === step) el.classList.add('active');
+            }
+        }
+        
+        // 重置实验
+        function resetExperiment() {
+            if (animationId) cancelAnimationFrame(animationId);
+            isRunning = false;
+            phase = 'ready';
+            cartX = 0;
+            cartVelocity = 0;
+            slideDistance = 0;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('distance').textContent = '-- cm';
+            document.getElementById('speedChange').textContent = '--';
+            document.getElementById('conclusion').textContent = '--';
+            updateSteps(0);
+            drawScene();
+        }
+        
+        // 表面选择
+        document.querySelectorAll('.surface-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                if (isRunning) return;
+                
+                document.querySelectorAll('.surface-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                
+                currentSurface = this.dataset.surface;
+                currentFriction = parseFloat(this.dataset.friction);
+                
+                // 更新摩擦力指示器
+                document.getElementById('frictionFill').style.width = (currentFriction * 100) + '%';
+                const frictionLabels = ['无', '小', '中', '较大', '大'];
+                const frictionIndex = Math.round(currentFriction * 4);
+                document.getElementById('frictionValue').textContent = frictionLabels[frictionIndex];
+                
+                // 更新当前表面显示
+                document.getElementById('currentSurface').textContent = surfaceColors[currentSurface].name;
+                
+                resetExperiment();
+            });
+        });
+        
+        // 开始按钮
+        document.getElementById('startBtn').addEventListener('click', startExperiment);
+        
+        // 初始绘制
+        drawScene();
+        
+        // ========== 惯性演示 ==========
+        const inertiaCanvas = document.getElementById('inertiaCanvas');
+        const inertiaCtx = inertiaCanvas.getContext('2d');
+        
+        function resizeInertiaCanvas() {
+            const container = inertiaCanvas.parentElement;
+            inertiaCanvas.width = Math.min(600, container.clientWidth - 60);
+            inertiaCanvas.height = 300;
+        }
+        resizeInertiaCanvas();
+        window.addEventListener('resize', resizeInertiaCanvas);
+        
+        let carX = 50;
+        let personX = 80;
+        let carVelocity = 0;
+        let inertiaPhase = 'ready'; // ready, moving, braking, done
+        let inertiaAnimationId = null;
+        
+        function drawInertiaScene() {
+            inertiaCtx.clearRect(0, 0, inertiaCanvas.width, inertiaCanvas.height);
+            
+            // 绘制道路
+            inertiaCtx.fillStyle = '#333';
+            inertiaCtx.fillRect(0, inertiaCanvas.height - 50, inertiaCanvas.width, 50);
+            
+            // 绘制道路标线
+            inertiaCtx.strokeStyle = '#fff';
+            inertiaCtx.setLineDash([20, 10]);
+            inertiaCtx.beginPath();
+            inertiaCtx.moveTo(0, inertiaCanvas.height - 25);
+            inertiaCtx.lineTo(inertiaCanvas.width, inertiaCanvas.height - 25);
+            inertiaCtx.stroke();
+            inertiaCtx.setLineDash([]);
+            
+            // 绘制汽车
+            drawCar(carX, inertiaCanvas.height - 100);
+            
+            // 绘制乘客
+            if (inertiaPhase === 'ready' || inertiaPhase === 'moving') {
+                drawPerson(personX, inertiaCanvas.height - 100, 0);
+            } else if (inertiaPhase === 'braking') {
+                // 乘客前倾
+                drawPerson(personX + 5, inertiaCanvas.height - 100, -15);
+            } else {
+                drawPerson(personX + 5, inertiaCanvas.height - 100, -20);
+            }
+            
+            // 绘制说明
+            inertiaCtx.fillStyle = '#00d4ff';
+            inertiaCtx.font = '14px Arial';
+            if (inertiaPhase === 'ready') {
+                inertiaCtx.fillText('点击"开始演示"观察急刹车时的惯性现象', 20, 30);
+            } else if (inertiaPhase === 'moving') {
+                inertiaCtx.fillText('汽车正在行驶中...', 20, 30);
+            } else if (inertiaPhase === 'braking') {
+                inertiaCtx.fillText('急刹车！乘客由于惯性向前倾', 20, 30);
+            }
+        }
+        
+        function drawCar(x, y) {
+            // 车身
+            inertiaCtx.fillStyle = '#3498db';
+            inertiaCtx.fillRect(x, y + 20, 120, 35);
+            
+            // 车顶
+            inertiaCtx.fillStyle = '#2980b9';
+            inertiaCtx.beginPath();
+            inertiaCtx.moveTo(x + 20, y + 20);
+            inertiaCtx.lineTo(x + 30, y);
+            inertiaCtx.lineTo(x + 90, y);
+            inertiaCtx.lineTo(x + 100, y + 20);
+            inertiaCtx.closePath();
+            inertiaCtx.fill();
+            
+            // 车窗
+            inertiaCtx.fillStyle = '#87ceeb';
+            inertiaCtx.fillRect(x + 35, y + 5, 50, 15);
+            
+            // 车轮
+            inertiaCtx.fillStyle = '#2c3e50';
+            inertiaCtx.beginPath();
+            inertiaCtx.arc(x + 25, y + 60, 12, 0, Math.PI * 2);
+            inertiaCtx.fill();
+            inertiaCtx.beginPath();
+            inertiaCtx.arc(x + 95, y + 60, 12, 0, Math.PI * 2);
+            inertiaCtx.fill();
+        }
+        
+        function drawPerson(x, y, leanAngle) {
+            // 乘客身体
+            inertiaCtx.save();
+            inertiaCtx.translate(x, y);
+            inertiaCtx.rotate(leanAngle * Math.PI / 180);
+            
+            // 头
+            inertiaCtx.fillStyle = '#ffd93d';
+            inertiaCtx.beginPath();
+            inertiaCtx.arc(15, -15, 10, 0, Math.PI * 2);
+            inertiaCtx.fill();
+            
+            // 身体
+            inertiaCtx.fillStyle = '#e74c3c';
+            inertiaCtx.fillRect(5, -5, 20, 30);
+            
+            inertiaCtx.restore();
+        }
+        
+        function startInertiaDemo() {
+            if (inertiaPhase !== 'ready') return;
+            
+            inertiaPhase = 'moving';
+            carVelocity = 3;
+            carX = 50;
+            personX = 80;
+            
+            document.getElementById('inertiaExplanation').innerHTML = 
+                '<strong style="color:#ffd43b">汽车正在行驶...</strong> 乘客和汽车保持相同速度前进';
+            
+            animateInertia();
+        }
+        
+        function animateInertia() {
+            if (inertiaPhase === 'moving') {
+                carX += carVelocity;
+                personX = carX + 30;
+                
+                // 刹车点
+                if (carX > inertiaCanvas.width - 200) {
+                    inertiaPhase = 'braking';
+                    document.getElementById('inertiaExplanation').innerHTML = 
+                        '<strong style="color:#ff6b6b">急刹车！</strong> 汽车突然减速，乘客下半身随车减速，<br>但上半身由于<strong style="color:#00d4ff">惯性</strong>继续向前运动，所以向前倾倒！';
+                }
+            } else if (inertiaPhase === 'braking') {
+                carX += 0.5;
+                carVelocity = 0.5;
+                
+                // 停止
+                if (carVelocity < 0.6) {
+                    setTimeout(() => {
+                        inertiaPhase = 'done';
+                        document.getElementById('inertiaExplanation').innerHTML = 
+                            '<strong style="color:#7ee787">✓ 现象解释：</strong><br>' +
+                            '1. 汽车急刹车时，车身减速<br>' +
+                            '2. 乘客下半身与座位摩擦，随车减速<br>' +
+                            '3. 乘客上半身由于<strong style="color:#00d4ff">惯性</strong>继续向前运动<br>' +
+                            '4. 所以乘客向前倾倒<br><br>' +
+                            '<strong style="color:#ffd43b">这说明：一切物体都有保持原有运动状态的性质——惯性！</strong>';
+                        drawInertiaScene();
+                    }, 1000);
+                    return;
+                }
+            }
+            
+            drawInertiaScene();
+            
+            if (inertiaPhase !== 'done') {
+                inertiaAnimationId = requestAnimationFrame(animateInertia);
+            }
+        }
+        
+        function resetInertiaDemo() {
+            if (inertiaAnimationId) cancelAnimationFrame(inertiaAnimationId);
+            inertiaPhase = 'ready';
+            carX = 50;
+            personX = 80;
+            carVelocity = 0;
+            document.getElementById('inertiaExplanation').innerHTML = '点击"开始演示"观察汽车急刹车时乘客的状态变化';
+            drawInertiaScene();
+        }
+        
+        document.getElementById('inertiaStart').addEventListener('click', startInertiaDemo);
+        document.getElementById('inertiaReset').addEventListener('click', resetInertiaDemo);
+        
+        // 初始绘制惯性演示
+        drawInertiaScene();
+        
+        // ========== 课堂测验 ==========
+        const quizAnswers = {
+            1: { answer: 'B', explanation: '牛顿第一定律无法通过实验直接验证（因为找不到完全不受力的环境），而是在实验基础上通过科学推理得出的。这就是著名的"理想实验法"。' },
+            2: { answer: 'C', explanation: '惯性是物体的固有属性，只与质量有关。质量越大，惯性越大。惯性与速度、受力、运动状态都无关。静止的物体也有惯性！' },
+            3: { answer: 'B', explanation: '锤柄撞击地面时，锤柄受力停止运动，但锤头由于惯性继续向下运动，从而套紧在锤柄上。这是利用惯性的典型例子。' }
+        };
+        
+        document.querySelectorAll('.quiz-option').forEach(option => {
+            option.addEventListener('click', function() {
+                const question = this.closest('.quiz-question');
+                const questionNum = question.dataset.question;
+                const selectedAnswer = this.dataset.answer;
+                const correctAnswer = quizAnswers[questionNum].answer;
+                const feedback = question.querySelector('.quiz-feedback');
+                
+                // 禁用所有选项
+                question.querySelectorAll('.quiz-option').forEach(opt => {
+                    opt.style.pointerEvents = 'none';
+                    if (opt.dataset.answer === correctAnswer) {
+                        opt.classList.add('correct');
+                    }
+                });
+                
+                if (selectedAnswer === correctAnswer) {
+                    this.classList.add('correct');
+                    feedback.className = 'quiz-feedback show correct';
+                    feedback.innerHTML = '✓ 回答正确！' + quizAnswers[questionNum].explanation;
+                } else {
+                    this.classList.add('wrong');
+                    feedback.className = 'quiz-feedback show wrong';
+                    feedback.innerHTML = '✗ 回答错误。正确答案是 ' + correctAnswer + '。' + quizAnswers[questionNum].explanation;
+                }
+            });
+        });
+    </script>
+</body>
+</html>

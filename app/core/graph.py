@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Awaitable, Callable
-from typing import Literal, Optional
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Any, Literal, Mapping, Optional
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import interrupt
+from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field
 
 from app.core.llm import llm, structured_output_llm
@@ -18,6 +18,23 @@ from app.core.rag import RagRuntime
 from app.core.state import TeachingAssistantState, TeachingMetadata
 
 ATTACHMENT_MESSAGE_PREFIX = "用户上传的附件内容，供当前轮对话参考：\n"
+
+
+INTERRUPT_FOR_USERINPUT_NODE = "interrupt_for_userinput"
+METADATA_REVIEW_INTERRUPT_NODE = "metadata_review_interrupt_node"
+TEACHING_PLAN_REVIEW_INTERRUPT_NODE = "teaching_plan_review_interrupt_node"
+APPROVAL_INTERRUPT_NODES = {
+    METADATA_REVIEW_INTERRUPT_NODE,
+    TEACHING_PLAN_REVIEW_INTERRUPT_NODE,
+}
+RESUMABLE_INTERRUPT_NODES = {
+    INTERRUPT_FOR_USERINPUT_NODE,
+    *APPROVAL_INTERRUPT_NODES,
+}
+APPROVAL_STAGE_BY_NODE = {
+    METADATA_REVIEW_INTERRUPT_NODE: "metadata_review",
+    TEACHING_PLAN_REVIEW_INTERRUPT_NODE: "teaching_plan_review",
+}
 
 
 class IntentRoute(BaseModel):
@@ -57,6 +74,84 @@ def build_input_messages(
     return messages
 
 
+def _build_resume_message_update(user_input: Any) -> dict[str, list[BaseMessage]]:
+    if isinstance(user_input, Mapping):
+        return {
+            "messages": build_input_messages(
+                str(user_input.get("message", "") or ""),
+                user_input.get("attachment_text"),
+                user_input.get("attachment_paths"),
+            )
+        }
+    return {"messages": build_input_messages(str(user_input))}
+
+
+def metadata_review_interrupt_node(
+    state: TeachingAssistantState,
+    config: Optional[RunnableConfig] = None,
+):
+    # reporter = emit_progress(config, "metadata_review", "running", detail="等待教师确认教学要素")
+    user_input = interrupt(
+        _build_approval_payload(
+            "metadata_review",
+            metadata=state.get("teaching_metadata") or {},
+        )
+    )
+    if _is_approve_action(user_input):
+        # if reporter:
+        #     reporter.emit("metadata_review", "success", detail="已确认教学要素")
+        return Command(goto="rag_retrieval_node")
+    return Command(
+        update=_build_resume_message_update(user_input),
+        goto="metadata_structer_node",
+    )
+
+
+def _is_approve_action(user_input: Any) -> bool:
+    return isinstance(user_input, Mapping) and user_input.get("action") == "approve"
+
+
+def _build_approval_payload(
+    stage: Literal["metadata_review", "teaching_plan_review"],
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "stage": stage,
+        "title": "确认结构化教学要素" if stage == "metadata_review" else "确认教学计划",
+        "description": (
+            "已提取当前教学要素，请确认后继续生成教学计划。"
+            if stage == "metadata_review"
+            else "教学计划已生成，请确认是否继续生成课件、教案和互动内容。"
+        ),
+        "confirm_label": "确认并继续",
+        "cancel_label": "取消并修改",
+    }
+    if stage == "metadata_review":
+        payload["metadata"] = dict(metadata or {})
+    return payload
+
+
+def get_pending_approval_payload(
+    interrupts: Sequence[Any] | None,
+    next_nodes: Sequence[str] | None,
+) -> dict[str, Any] | None:
+    pending_nodes = tuple(next_nodes or ())
+    pending_interrupts = tuple(interrupts or ())
+    for node_name in pending_nodes:
+        if node_name not in APPROVAL_INTERRUPT_NODES:
+            continue
+        for pending_interrupt in pending_interrupts:
+            payload = getattr(pending_interrupt, "value", None)
+            if not isinstance(payload, Mapping):
+                continue
+            approval_payload = dict(payload)
+            approval_payload["interrupt_id"] = getattr(pending_interrupt, "id", "")
+            approval_payload.setdefault("stage", APPROVAL_STAGE_BY_NODE[node_name])
+            return approval_payload
+    return None
+
+
 def _message_to_text(message: AIMessage | HumanMessage) -> str:
     content = getattr(message, "content", "")
     if isinstance(content, str):
@@ -93,7 +188,7 @@ def intent_router_node(
                         'Do not output like this: "json\n{"intent": "normal_chat"}\n"'
                     )
                 ),
-            ] + state["messages"][-4:]
+            ] + [ msg for msg in state["messages"] if isinstance(msg, (HumanMessage, AIMessage))][-4:]
         )
         print(f"[意图识别节点] intent:{decision.intent}")
         if reporter:
@@ -172,7 +267,7 @@ def metadata_completion_condition(state: TeachingAssistantState):
     metadata = state.get("teaching_metadata")
     if metadata and metadata.get("is_complete"):
         print("[元数据完整性验证] is_complete=true")
-        return "rag_retrieval_node"
+        return METADATA_REVIEW_INTERRUPT_NODE
 
     print("[元数据完整性验证] is_complete=false")
     return "follow_up_questioner"
@@ -245,6 +340,22 @@ async def teaching_design_planner(
         raise
 
 
+def teaching_plan_review_interrupt_node(
+    state: TeachingAssistantState,
+    config: Optional[RunnableConfig] = None,
+):
+    reporter = emit_progress(config, "teaching_plan_review", "running", detail="等待教师确认教学计划")
+    user_input = interrupt(_build_approval_payload("teaching_plan_review"))
+    if _is_approve_action(user_input):
+        if reporter:
+            reporter.emit("teaching_plan_review", "success", detail="已确认教学计划")
+        return Command(goto=["ppt_generate_node", "docx_generate_node", "html_game_generate_node"])
+    return Command(
+        update=_build_resume_message_update(user_input),
+        goto="teaching_design_planner",
+    )
+
+
 def build_agent_graph(
     *,
     checkpointer: AsyncPostgresSaver,
@@ -296,9 +407,11 @@ def build_agent_graph(
     agent_builder.add_node("normal_chat_node", normal_chat_node)
     agent_builder.add_node("metadata_structer_node", metadata_structer_node)
     agent_builder.add_node("follow_up_questioner", follow_up_questioner)
-    agent_builder.add_node("interrupt_for_userinput", interrupt_for_userinput)
+    agent_builder.add_node(INTERRUPT_FOR_USERINPUT_NODE, interrupt_for_userinput)
+    agent_builder.add_node(METADATA_REVIEW_INTERRUPT_NODE, metadata_review_interrupt_node)
     agent_builder.add_node("rag_retrieval_node", rag_retrieval_node)
     agent_builder.add_node("teaching_design_planner", teaching_design_planner)
+    agent_builder.add_node(TEACHING_PLAN_REVIEW_INTERRUPT_NODE, teaching_plan_review_interrupt_node)
     agent_builder.add_node("ppt_generate_node", ppt_generate_node)
     agent_builder.add_node("docx_generate_node", docx_generate_node)
     agent_builder.add_node("html_game_generate_node", html_generate_node)
@@ -318,18 +431,20 @@ def build_agent_graph(
         "metadata_structer_node",
         metadata_completion_condition,
         {
-            "rag_retrieval_node": "rag_retrieval_node",
+            METADATA_REVIEW_INTERRUPT_NODE: METADATA_REVIEW_INTERRUPT_NODE,
             "follow_up_questioner": "follow_up_questioner",
         },
     )
-    agent_builder.add_edge("follow_up_questioner", "interrupt_for_userinput")
-    agent_builder.add_edge("interrupt_for_userinput", "metadata_structer_node")
+    agent_builder.add_edge("follow_up_questioner", INTERRUPT_FOR_USERINPUT_NODE)
+    agent_builder.add_edge(INTERRUPT_FOR_USERINPUT_NODE, "metadata_structer_node")
+    # agent_builder.add_edge(METADATA_REVIEW_INTERRUPT_NODE, "rag_retrieval_node")
     agent_builder.add_edge("rag_retrieval_node", "teaching_design_planner")
-    # agent_builder.add_edge("teaching_design_planner", "ppt_generate_node")
-    # agent_builder.add_edge("teaching_design_planner", "docx_generate_node")
-    agent_builder.add_edge("teaching_design_planner", "html_game_generate_node")
-    # agent_builder.add_edge("ppt_generate_node", "artifact_fan_in_node")
-    # agent_builder.add_edge("docx_generate_node", "artifact_fan_in_node")
+    agent_builder.add_edge("teaching_design_planner", TEACHING_PLAN_REVIEW_INTERRUPT_NODE)
+    # agent_builder.add_edge(TEACHING_PLAN_REVIEW_INTERRUPT_NODE, "ppt_generate_node")
+    # agent_builder.add_edge(TEACHING_PLAN_REVIEW_INTERRUPT_NODE, "docx_generate_node")
+    # agent_builder.add_edge(TEACHING_PLAN_REVIEW_INTERRUPT_NODE, "html_game_generate_node")
+    agent_builder.add_edge("ppt_generate_node", "artifact_fan_in_node")
+    agent_builder.add_edge("docx_generate_node", "artifact_fan_in_node")
     agent_builder.add_edge("html_game_generate_node", "artifact_fan_in_node")
     agent_builder.add_edge("artifact_fan_in_node", END)
 

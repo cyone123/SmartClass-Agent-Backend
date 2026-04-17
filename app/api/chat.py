@@ -40,10 +40,16 @@ async def chat(
 ):
     thread_id = message.thread_id
     attachment_ids = message.attachment_ids or []
+    approval = message.approval.model_dump() if message.approval is not None else None
     if attachment_ids and not thread_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="thread_id is required when attachment_ids are provided.",
+        )
+    if approval and not thread_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="thread_id is required when approval is provided.",
         )
 
     plan_id = None
@@ -66,6 +72,15 @@ async def chat(
             attachment_ids=attachment_ids,
         )
 
+    if approval:
+        try:
+            await agent_runtime.validate_approval_request(thread_id, approval["interrupt_id"])
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+
     async def event_stream():
         run_id = uuid4().hex
         yield format_sse_json_event(
@@ -74,16 +89,17 @@ async def chat(
         )
 
         async for event in agent_runtime.stream_agent_events(
-            message.message,
+            message.message or "",
             thread_id,
             run_id=run_id,
             plan_id=plan_id,
             attachments=attachments,
+            approval=approval,
         ):
             event_name = event.get("event")
             payload = event.get("data")
 
-            if event_name in {"progress", "token", "error", "suggestions", "artifact"}:
+            if event_name in {"progress", "token", "error", "suggestions", "artifact", "approval"}:
                 yield format_sse_json_event(payload, event=event_name)
 
         yield format_sse_event("[DONE]", event="done")
