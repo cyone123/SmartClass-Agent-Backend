@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
+import shutil
+import zipfile
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from pathlib import Path
@@ -53,19 +56,25 @@ from app.core.state import SubAgentResult, TeachingAssistantState
 from app.core.video_transcribe import VideoTranscriptionRuntime
 from app.core.workspace import WorkspaceToolset, get_workspace_paths
 from app.dependencies.db import AsyncSessionLocal, close_agent_checkpointer, init_agent_checkpointer
-from app.models.file import AttachmentFile
+from app.models.file import ArtifactFile, AttachmentFile
 from app.services import artifact_service, file_service
 
 ArtifactType = Literal["ppt", "docx", "html-game"]
 ArtifactEventEmitter = Callable[[dict[str, Any]], None]
 
-ROOT_STREAMING_NODES = {"normal_chat_node", "follow_up_questioner", "teaching_design_planner"}
+ROOT_STREAMING_NODES = {
+    "normal_chat_node",
+    "follow_up_questioner",
+    "teaching_design_planner",
+    "artifact_fan_in_node",
+}
 SUGGESTION_COUNT = 3
 SUGGESTION_CONTEXT_WINDOW = 6
 WORKSPACE_TOOL_NAMES = {
     "list_workspace_files",
     "read_workspace_file",
     "write_workspace_file",
+    "replace_workspace_text",
     "run_workspace_code",
 }
 BLOCKED_SHELL_PATTERN = re.compile(
@@ -76,6 +85,11 @@ ARTIFACT_STEP_KEYS: dict[ArtifactType, str] = {
     "docx": "lesson_plan_generation",
     "html-game": "game_generation",
 }
+ARTIFACT_REVISION_STEP_KEYS: dict[ArtifactType, str] = {
+    "ppt": "ppt_revision",
+    "docx": "docx_revision",
+    "html-game": "game_revision",
+}
 ARTIFACT_STATE_KEYS: dict[ArtifactType, str] = {
     "ppt": "ppt_result",
     "docx": "lesson_plan_result",
@@ -85,6 +99,11 @@ ARTIFACT_ALLOWED_EXTENSIONS: dict[ArtifactType, tuple[str, ...]] = {
     "ppt": (".pptx",),
     "docx": (".docx",),
     "html-game": (".html",),
+}
+ARTIFACT_SOURCE_FILENAMES: dict[ArtifactType, str] = {
+    "ppt": "source_artifact.pptx",
+    "docx": "source_artifact.docx",
+    "html-game": "source_artifact.html",
 }
 
 
@@ -253,6 +272,22 @@ def _artifact_display_name(artifact_type: ArtifactType) -> str:
         "docx": "教案",
         "html-game": "互动内容",
     }[artifact_type]
+
+
+def _artifact_catalog_entry(record: ArtifactFile) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "type": record.artifact_type,
+        "title": record.title,
+        "status": record.status,
+        "thread_id": record.thread_id,
+        "plan_id": record.plan_id,
+        "storage_path": record.storage_path,
+        "revision_number": record.revision_number,
+        "parent_artifact_id": record.parent_artifact_id,
+        "root_artifact_id": record.root_artifact_id,
+        "is_current": record.is_current,
+    }
 
 
 class SkillPromptMiddleware(AgentMiddleware):
@@ -607,6 +642,9 @@ class AgentRuntime:
             ppt_generate_node=self.ppt_generate_node,
             docx_generate_node=self.docx_generate_node,
             html_generate_node=self.html_game_generate_node,
+            ppt_revision_node=self.ppt_revision_node,
+            docx_revision_node=self.docx_revision_node,
+            html_revision_node=self.html_game_revision_node,
         )
         self.graph = self.streaming_graph
 
@@ -792,6 +830,7 @@ class AgentRuntime:
         attachment_paths: list[str] | None = None,
         approval: dict[str, Any] | None = None,
     ):
+        state_snapshot = await self._get_thread_state_snapshot(thread_id)
         if await self._should_resume_thread(thread_id):
             if approval:
                 return Command(
@@ -815,12 +854,22 @@ class AgentRuntime:
 
         graph_input: dict[str, Any] = {
             "messages": build_input_messages(message, attachment_text, attachment_paths),
-            "ppt_result": _default_subagent_result("ppt"),
-            "lesson_plan_result": _default_subagent_result("docx"),
-            "game_result": _default_subagent_result("html-game"),
         }
         if plan_id is not None:
             graph_input["plan_id"] = plan_id
+        if thread_id:
+            async with AsyncSessionLocal() as db:
+                current_artifacts = await artifact_service.list_latest_ready_current_artifacts_by_thread(
+                    db,
+                    thread_id=thread_id,
+                )
+            graph_input["artifact_catalog"] = [_artifact_catalog_entry(record) for record in current_artifacts]
+
+        existing_values = getattr(state_snapshot, "values", {}) or {}
+        if not existing_values:
+            graph_input["ppt_result"] = _default_subagent_result("ppt")
+            graph_input["lesson_plan_result"] = _default_subagent_result("docx")
+            graph_input["game_result"] = _default_subagent_result("html-game")
         return graph_input
 
     def _should_emit_text_chunk(
@@ -923,6 +972,62 @@ class AgentRuntime:
             "Do not use shell to install anything."
         )
 
+    def _build_revision_prompt(
+        self,
+        state: TeachingAssistantState,
+        artifact_type: ArtifactType,
+        *,
+        source_artifact: dict[str, Any],
+        agent_config: RunnableConfig,
+    ) -> str:
+        paths = get_workspace_paths(agent_config)
+        latest_request = (state.get("user_feedback") or "").strip() or self._build_artifact_prompt(state, artifact_type)
+        source_file = paths.workspace_root / ARTIFACT_SOURCE_FILENAMES[artifact_type]
+        unpacked_dir = paths.workspace_root / "source_unpacked"
+        summary_file = paths.workspace_root / "source_summary.json"
+
+        base_instruction = {
+            "ppt": (
+                "Revise the existing `.pptx` artifact instead of creating a deck from scratch. "
+                "Use the prepared source summary and unpacked Office XML as references. "
+                "Preserve unaffected slide structure as much as possible, then write the revised `.pptx` to `AGENT_OUTPUT_DIR`."
+            ),
+            "docx": (
+                "Revise the existing `.docx` artifact. "
+                "Use the unpacked Office XML under `source_unpacked/`, apply targeted edits, then pack a revised `.docx` into `AGENT_OUTPUT_DIR`. "
+                "Prefer precise text changes over rewriting the entire document."
+            ),
+            "html-game": (
+                "Revise the existing `.html` artifact directly. "
+                "Read the source file, apply targeted changes, and write the revised `.html` to `AGENT_OUTPUT_DIR`."
+            ),
+        }[artifact_type]
+
+        skill_hints = {
+            "ppt": (
+                "Load `ppt-generator`. If you need to inspect Office XML more deeply, you may also load `docx` "
+                "and use its `scripts/office/pack.py` or `scripts/office/validate.py` tooling through `run_skill_script`."
+            ),
+            "docx": (
+                "Load `docx` and use its office scripts when needed. "
+                "The source file is already unpacked, so you can edit the XML in place and repack it."
+            ),
+            "html-game": (
+                "Load `html-interactive`. Use `read_workspace_file` and `replace_workspace_text` for targeted updates whenever possible."
+            ),
+        }[artifact_type]
+
+        return (
+            f"{base_instruction}\n\n"
+            f"{skill_hints}\n\n"
+            f"Revision request:\n{latest_request}\n\n"
+            f"Source artifact metadata:\n{json.dumps(source_artifact, ensure_ascii=False, indent=2)}\n\n"
+            f"Prepared source file:\n{source_file}\n\n"
+            f"Prepared unpacked directory:\n{unpacked_dir}\n\n"
+            f"Prepared source summary:\n{summary_file}\n\n"
+            "Do not edit files in the database storage directory directly. Work only inside the agent workspace and write the final revised artifact into `AGENT_OUTPUT_DIR`."
+        )
+
     def _extract_best_error(self, invoke_result: dict[str, Any] | None, exc: Exception | None = None) -> str:
         if exc is not None:
             return str(exc)
@@ -1008,19 +1113,112 @@ class AgentRuntime:
             f"AGENT_OUTPUT_DIR ({paths.output_root}). Final agent message: {final_text}"
         )
 
-    async def _run_artifact_generation(
+    def _clear_workspace_for_job(self, agent_config: RunnableConfig) -> None:
+        paths = get_workspace_paths(agent_config)
+        for target in (paths.workspace_root, paths.output_root):
+            if not target.exists():
+                continue
+            for child in target.iterdir():
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+
+    def _extract_text_from_xml(self, xml_text: str) -> str:
+        text = re.sub(r"<[^>]+>", " ", xml_text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+    def _prepare_revision_workspace(
+        self,
+        *,
+        artifact_type: ArtifactType,
+        source_artifact: dict[str, Any],
+        state: TeachingAssistantState,
+        agent_config: RunnableConfig,
+    ) -> None:
+        source_path = Path(str(source_artifact.get("storage_path") or "")).resolve()
+        if not source_path.exists() or not source_path.is_file():
+            raise FileNotFoundError(f"Source artifact file not found: {source_path}")
+
+        self._clear_workspace_for_job(agent_config)
+        paths = get_workspace_paths(agent_config)
+        workspace_source = paths.workspace_root / ARTIFACT_SOURCE_FILENAMES[artifact_type]
+        shutil.copy2(source_path, workspace_source)
+
+        revision_request = {
+            "artifact_type": artifact_type,
+            "user_feedback": state.get("user_feedback"),
+            "feedback_type": state.get("feedback_type"),
+            "iteration_count": state.get("iteration_count"),
+        }
+        (paths.workspace_root / "revision_request.json").write_text(
+            json.dumps(revision_request, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (paths.workspace_root / "source_artifact.json").write_text(
+            json.dumps(source_artifact, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        if artifact_type in {"ppt", "docx"}:
+            unpacked_dir = paths.workspace_root / "source_unpacked"
+            unpacked_dir.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(workspace_source, "r") as archive:
+                archive.extractall(unpacked_dir)
+
+            summary: dict[str, Any] = {
+                "source_file": workspace_source.name,
+                "unpacked_dir": "source_unpacked",
+                "entries": [],
+            }
+            for xml_file in sorted(unpacked_dir.rglob("*.xml")):
+                try:
+                    xml_text = xml_file.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                extracted_text = self._extract_text_from_xml(xml_text)
+                if not extracted_text:
+                    continue
+                summary["entries"].append(
+                    {
+                        "path": xml_file.relative_to(paths.workspace_root).as_posix(),
+                        "text": extracted_text[:2000],
+                    }
+                )
+            (paths.workspace_root / "source_summary.json").write_text(
+                json.dumps(summary, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        elif artifact_type == "html-game":
+            html_text = workspace_source.read_text(encoding="utf-8")
+            (paths.workspace_root / "source_summary.json").write_text(
+                json.dumps(
+                    {
+                        "source_file": workspace_source.name,
+                        "preview": html_text[:4000],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+    async def _run_artifact_job(
         self,
         *,
         state: TeachingAssistantState,
         config: RunnableConfig | None,
         artifact_type: ArtifactType,
         agent_runnable: Any,
+        mode: Literal["create", "revise"],
     ) -> dict[str, Any]:
-        step_key = ARTIFACT_STEP_KEYS[artifact_type]
+        step_key = ARTIFACT_STEP_KEYS[artifact_type] if mode == "create" else ARTIFACT_REVISION_STEP_KEYS[artifact_type]
         state_key = ARTIFACT_STATE_KEYS[artifact_type]
         main_reporter = _get_configurable_value(config, "progress_reporter")
         if isinstance(main_reporter, ProgressReporter):
-            main_reporter.emit(step_key, "running", detail=f"{_artifact_display_name(artifact_type)}生成中")
+            action_text = "生成中" if mode == "create" else "修改中"
+            main_reporter.emit(step_key, "running", detail=f"{_artifact_display_name(artifact_type)}{action_text}")
 
         thread_id = str(_get_configurable_value(config, "thread_id") or "").strip()
         run_id = str(_get_configurable_value(config, "run_id") or "").strip()
@@ -1029,24 +1227,47 @@ class AgentRuntime:
         emitter = _get_artifact_event_emitter(config)
 
         if not thread_id or not run_id or plan_id is None:
-            error_message = "Missing thread_id, run_id, or plan_id for artifact generation."
+            error_message = "Missing thread_id, run_id, or plan_id for artifact job."
             if isinstance(main_reporter, ProgressReporter):
                 main_reporter.emit(step_key, "failed", detail=error_message)
             return {state_key: _failed_subagent_result(artifact_type, error=error_message)}
 
         sub_run_id = self._artifact_run_id(run_id, artifact_type)
-        artifact_record = None
+        artifact_record: ArtifactFile | None = None
+        source_artifact: dict[str, Any] | None = None
 
         try:
             async with AsyncSessionLocal() as db:
-                artifact_record = await artifact_service.create_running_artifact(
-                    db,
-                    plan_id=plan_id,
-                    thread_id=thread_id,
-                    artifact_type=artifact_type,
-                    run_id=sub_run_id,
-                    title=artifact_title,
-                )
+                if mode == "create":
+                    artifact_record = await artifact_service.create_running_artifact(
+                        db,
+                        plan_id=plan_id,
+                        thread_id=thread_id,
+                        artifact_type=artifact_type,
+                        run_id=sub_run_id,
+                        title=artifact_title,
+                    )
+                else:
+                    source_artifact = next(
+                        (
+                            item
+                            for item in (state.get("revision_source_artifacts") or [])
+                            if str(item.get("type") or "") == artifact_type
+                        ),
+                        None,
+                    )
+                    if source_artifact is None:
+                        raise RuntimeError(f"No source artifact was resolved for {artifact_type} revision.")
+                    source_record = await artifact_service.require_artifact_by_id(
+                        db,
+                        int(source_artifact["id"]),
+                    )
+                    artifact_record = await artifact_service.create_revision_artifact(
+                        db,
+                        source_artifact=source_record,
+                        run_id=sub_run_id,
+                        title=source_record.title,
+                    )
                 if emitter:
                     emitter(
                         {
@@ -1062,12 +1283,36 @@ class AgentRuntime:
                 self._artifact_agent_thread_id(thread_id, artifact_type),
                 run_id=sub_run_id,
             )
+            if mode == "revise":
+                if isinstance(main_reporter, ProgressReporter):
+                    main_reporter.emit("artifact_revision_prepare", "running", detail=f"准备{artifact_title}修改工作区")
+                assert source_artifact is not None
+                self._prepare_revision_workspace(
+                    artifact_type=artifact_type,
+                    source_artifact=source_artifact,
+                    state=state,
+                    agent_config=agent_config,
+                )
+                if isinstance(main_reporter, ProgressReporter):
+                    main_reporter.emit("artifact_revision_prepare", "success", detail=f"{artifact_title}修改工作区已就绪")
+            else:
+                self._clear_workspace_for_job(agent_config)
             output_snapshot_before = self._snapshot_generated_outputs(
                 agent_config,
                 artifact_type,
             )
+            prompt = (
+                self._build_artifact_prompt(state, artifact_type)
+                if mode == "create"
+                else self._build_revision_prompt(
+                    state,
+                    artifact_type,
+                    source_artifact=source_artifact or {},
+                    agent_config=agent_config,
+                )
+            )
             invoke_result = await agent_runnable.ainvoke(
-                {"messages": [{"role": "user", "content": self._build_artifact_prompt(state, artifact_type)}]},
+                {"messages": [{"role": "user", "content": prompt}]},
                 config=agent_config,
             )
             output_path = self._find_generated_output(
@@ -1102,10 +1347,11 @@ class AgentRuntime:
                                 "artifact": _artifact_payload(refreshed_record),
                             },
                         }
-                    )
+                )
 
             if isinstance(main_reporter, ProgressReporter):
-                main_reporter.emit(step_key, "success", detail=f"{artifact_title}已生成")
+                detail = f"{artifact_title}已生成" if mode == "create" else f"{artifact_title}已更新"
+                main_reporter.emit(step_key, "success", detail=detail)
             return {
                 state_key: _success_subagent_result(
                     artifact_type,
@@ -1137,6 +1383,8 @@ class AgentRuntime:
 
             if isinstance(main_reporter, ProgressReporter):
                 main_reporter.emit(step_key, "failed", detail=error_message)
+                if mode == "revise":
+                    main_reporter.emit("artifact_revision_prepare", "failed", detail=error_message)
             return {
                 state_key: _failed_subagent_result(
                     artifact_type,
@@ -1151,11 +1399,12 @@ class AgentRuntime:
         state: TeachingAssistantState,
         config: Optional[RunnableConfig] = None,
     ) -> dict[str, Any]:
-        return await self._run_artifact_generation(
+        return await self._run_artifact_job(
             state=state,
             config=config,
             artifact_type="ppt",
             agent_runnable=self.ppt_agent_runnable,
+            mode="create",
         )
 
     async def docx_generate_node(
@@ -1163,11 +1412,12 @@ class AgentRuntime:
         state: TeachingAssistantState,
         config: Optional[RunnableConfig] = None,
     ) -> dict[str, Any]:
-        return await self._run_artifact_generation(
+        return await self._run_artifact_job(
             state=state,
             config=config,
             artifact_type="docx",
             agent_runnable=self.docx_agent_runnable,
+            mode="create",
         )
 
     async def html_game_generate_node(
@@ -1175,11 +1425,51 @@ class AgentRuntime:
         state: TeachingAssistantState,
         config: Optional[RunnableConfig] = None,
     ) -> dict[str, Any]:
-        return await self._run_artifact_generation(
+        return await self._run_artifact_job(
             state=state,
             config=config,
             artifact_type="html-game",
             agent_runnable=self.html_game_agent_runnable,
+            mode="create",
+        )
+
+    async def ppt_revision_node(
+        self,
+        state: TeachingAssistantState,
+        config: Optional[RunnableConfig] = None,
+    ) -> dict[str, Any]:
+        return await self._run_artifact_job(
+            state=state,
+            config=config,
+            artifact_type="ppt",
+            agent_runnable=self.ppt_agent_runnable,
+            mode="revise",
+        )
+
+    async def docx_revision_node(
+        self,
+        state: TeachingAssistantState,
+        config: Optional[RunnableConfig] = None,
+    ) -> dict[str, Any]:
+        return await self._run_artifact_job(
+            state=state,
+            config=config,
+            artifact_type="docx",
+            agent_runnable=self.docx_agent_runnable,
+            mode="revise",
+        )
+
+    async def html_game_revision_node(
+        self,
+        state: TeachingAssistantState,
+        config: Optional[RunnableConfig] = None,
+    ) -> dict[str, Any]:
+        return await self._run_artifact_job(
+            state=state,
+            config=config,
+            artifact_type="html-game",
+            agent_runnable=self.html_game_agent_runnable,
+            mode="revise",
         )
 
     async def stream_agent_events(

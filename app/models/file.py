@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -96,6 +96,20 @@ class ArtifactFile(Base):
     )
     thread_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     artifact_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    parent_artifact_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("artifact_files.id"),
+        nullable=True,
+        index=True,
+    )
+    root_artifact_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("artifact_files.id"),
+        nullable=True,
+        index=True,
+    )
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     original_name: Mapped[str] = mapped_column(String(255), nullable=False)
     stored_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -118,3 +132,15 @@ class ArtifactFile(Base):
     )
 
     plan: Mapped[Plan] = relationship("Plan", back_populates="artifacts")
+    parent_artifact: Mapped["ArtifactFile | None"] = relationship(
+        "ArtifactFile",
+        remote_side="ArtifactFile.id",
+        foreign_keys=[parent_artifact_id],
+        post_update=True,
+    )
+    root_artifact: Mapped["ArtifactFile | None"] = relationship(
+        "ArtifactFile",
+        remote_side="ArtifactFile.id",
+        foreign_keys=[root_artifact_id],
+        post_update=True,
+    )

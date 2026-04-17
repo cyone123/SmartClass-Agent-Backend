@@ -82,6 +82,33 @@ def test_workspace_manager_rejects_dependency_installers(
         manager.run_code(_config(), language="python", entrypoint="bad.py")
 
 
+def test_workspace_manager_replaces_targeted_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FILE_STORAGE_ROOT", str(tmp_path))
+    manager = WorkspaceManager()
+    manager.write_file(
+        _config(),
+        relative_path="index.html",
+        content="<h1>Old title</h1><p>Old title</p>",
+    )
+
+    result = manager.replace_text(
+        _config(),
+        relative_path="index.html",
+        old_text="Old title",
+        new_text="New title",
+        count=1,
+    )
+
+    assert result["occurrences_found"] == 2
+    assert result["occurrences_replaced"] == 1
+    content = manager.read_file(_config(), relative_path="index.html")["content"]
+    assert "<h1>New title</h1>" in content
+    assert "<p>Old title</p>" in content
+
+
 def test_emit_progress_is_silent_without_registered_reporter(capsys: pytest.CaptureFixture[str]) -> None:
     emitted = emit_progress(
         {"configurable": {"thread_id": "thread-1", "run_id": "artifact-docx-run"}},

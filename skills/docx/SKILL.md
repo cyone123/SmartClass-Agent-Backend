@@ -9,6 +9,7 @@ allowed-tools:
   - list_workspace_files
   - read_workspace_file
   - write_workspace_file
+  - replace_workspace_text
   - run_workspace_code
 metadata:
   default-output: docx
@@ -415,6 +416,13 @@ python scripts/office/unpack.py document.docx unpacked/
 Extracts XML, pretty-prints, merges adjacent runs, and converts smart quotes to XML entities (`&#x201C;` etc.) so they survive editing. Use `--merge-runs false` to skip run merging.
 
 ### Step 2: Edit XML
+
+For the artifact revision workflow in this repo:
+
+- The source document will already be copied into the agent workspace as `source_artifact.docx`.
+- The unpacked XML tree will already exist under `source_unpacked/`.
+- Prefer localized XML edits with workspace tools such as `replace_workspace_text` when the requested change is targeted.
+- After editing, repack the workspace `source_unpacked/` tree into a new `.docx` under `AGENT_OUTPUT_DIR`.
 
 Edit files in `unpacked/word/`. See XML Reference below for patterns.
 

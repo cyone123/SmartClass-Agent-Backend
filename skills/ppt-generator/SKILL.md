@@ -1,6 +1,6 @@
 ---
 name: ppt-generator
-description: 使用教学设计、文档摘要或主题信息生成可编辑的 PPT 相关产物。适用于制作课件、演示稿、16:9 播放型网页或导出 `.pptx` 文件。
+description: 使用教学设计、文档摘要或主题信息生成可编辑的 PPT 相关产物。适用于制作课件、演示稿，导出 `.pptx` 文件。
 compatibility: |
   Requires Node.js on the host. Exporting real `.pptx` files also requires `pptxgenjs`
   to already be available in the host environment or bundled by the application. Do not
@@ -9,6 +9,7 @@ allowed-tools:
   - list_workspace_files
   - read_workspace_file
   - write_workspace_file
+  - replace_workspace_text
   - run_workspace_code
 metadata:
   default-output: pptx
@@ -83,6 +84,13 @@ metadata:
 - 页面比例默认 16:9。
 - 结构默认包含：
   封面、目录/概览、核心知识页、活动设计页、总结页。
+
+## 修改既有 PPT
+
+- 当任务是修改既有 `.pptx` 时，不要假设可以直接对二进制文件做文本 patch。
+- 先读取 workspace 中准备好的 `source_summary.json` 与 `source_unpacked/`，把它们当作现有 deck 的结构和文本参考。
+- 按用户 delta 生成新的 deck，尽量保持未修改页的原始结构和顺序。
+- 最终输出仍然写到 `AGENT_OUTPUT_DIR`，作为新的 `.pptx` 版本。
 
 ## 失败处理
 

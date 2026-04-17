@@ -125,9 +125,20 @@ async def list_knowledge_files(
 async def list_artifacts(
     thread_id: str,
     request: Request,
+    include_history: bool = False,
     db: AsyncSession = Depends(get_db),
 ) -> ArtifactFileListResponse:
-    artifacts = await artifact_service.list_artifacts_by_thread(db, thread_id=thread_id)
+    if include_history:
+        artifacts = await artifact_service.list_artifacts_by_thread(
+            db,
+            thread_id=thread_id,
+            include_history=True,
+        )
+    else:
+        artifacts = await artifact_service.list_artifacts_by_thread(
+            db,
+            thread_id=thread_id,
+        )
     payload = [_serialize_artifact(record, request) for record in artifacts]
     return success_response(data=payload, response_model=ArtifactFileListResponse)
 

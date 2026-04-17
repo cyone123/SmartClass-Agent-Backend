@@ -34,6 +34,7 @@ class TeachingAssistantState(TypedDict):
     rag_context: NotRequired[str]
     rag_results: NotRequired[list[dict[str, Any]]]
     teaching_design_plan: NotRequired[str]
+    artifact_catalog: NotRequired[list[dict[str, Any]]]
     ppt_result: NotRequired[SubAgentResult]
     lesson_plan_result: NotRequired[SubAgentResult]
     game_result: NotRequired[SubAgentResult]
@@ -42,6 +43,9 @@ class TeachingAssistantState(TypedDict):
         Literal["approve", "modify_ppt", "modify_lesson_plan", "modify_game", "modify_all"]
         | None
     ]
+    revision_targets: NotRequired[list[dict[str, Any]]]
+    revision_source_artifacts: NotRequired[list[dict[str, Any]]]
+    revision_results: NotRequired[list[SubAgentResult]]
     iteration_count: NotRequired[int]
     error: NotRequired[str | None]
     retry_count: NotRequired[int]

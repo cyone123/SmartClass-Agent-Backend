@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_file_storage_root
@@ -56,7 +56,7 @@ def _default_title(artifact_type: ArtifactType) -> str:
     mapping = {
         "ppt": "教学课件",
         "docx": "教案文档",
-        "html-game": "互动小游戏",
+        "html-game": "互动内容",
     }
     return mapping[artifact_type]
 
@@ -78,13 +78,7 @@ def _build_storage_path(
 ) -> tuple[str, Path]:
     safe_name = _sanitize_filename(original_name)
     stored_name = f"{run_id}_{safe_name}"
-    storage_path = (
-        get_file_storage_root()
-        / "artifacts"
-        / thread_id
-        / artifact_type
-        / stored_name
-    )
+    storage_path = get_file_storage_root() / "artifacts" / thread_id / artifact_type / stored_name
     return stored_name, storage_path
 
 
@@ -104,12 +98,132 @@ def serialize_artifact(
         "thread_id": artifact.thread_id,
         "extension": artifact.extension,
         "size_bytes": artifact.size_bytes,
+        "parent_artifact_id": artifact.parent_artifact_id,
+        "root_artifact_id": artifact.root_artifact_id,
+        "revision_number": artifact.revision_number,
+        "is_current": artifact.is_current,
         "url": url,
         "preview_url": preview_url,
         "error_message": artifact.error_message,
         "created_at": _serialize_timestamp(artifact.created_at),
         "updated_at": _serialize_timestamp(artifact.updated_at),
     }
+
+
+async def _list_artifacts(
+    db: AsyncSession,
+    *,
+    thread_id: str,
+    include_history: bool,
+) -> list[ArtifactFile]:
+    stmt = select(ArtifactFile).where(ArtifactFile.thread_id == thread_id)
+    if not include_history:
+        stmt = stmt.where(
+            or_(
+                ArtifactFile.is_current.is_(True),
+                ArtifactFile.status == ARTIFACT_STATUS_RUNNING,
+            )
+        )
+    stmt = stmt.order_by(ArtifactFile.created_at.desc(), ArtifactFile.id.desc())
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def list_artifacts_by_thread(
+    db: AsyncSession,
+    *,
+    thread_id: str,
+    include_history: bool = False,
+) -> list[ArtifactFile]:
+    return await _list_artifacts(db, thread_id=thread_id, include_history=include_history)
+
+
+async def list_current_artifacts_by_thread(
+    db: AsyncSession,
+    *,
+    thread_id: str,
+) -> list[ArtifactFile]:
+    artifacts = await _list_artifacts(db, thread_id=thread_id, include_history=False)
+    return [artifact for artifact in artifacts if artifact.status == ARTIFACT_STATUS_READY or artifact.is_current]
+
+
+async def get_latest_current_artifact_by_type(
+    db: AsyncSession,
+    *,
+    thread_id: str,
+    artifact_type: ArtifactType,
+) -> ArtifactFile | None:
+    stmt = (
+        select(ArtifactFile)
+        .where(
+            ArtifactFile.thread_id == thread_id,
+            ArtifactFile.artifact_type == artifact_type,
+            ArtifactFile.is_current.is_(True),
+        )
+        .order_by(ArtifactFile.updated_at.desc(), ArtifactFile.id.desc())
+    )
+    result = await db.execute(stmt)
+    return result.scalars().first()
+
+
+async def list_latest_current_artifacts_by_thread(
+    db: AsyncSession,
+    *,
+    thread_id: str,
+) -> list[ArtifactFile]:
+    artifacts = await list_current_artifacts_by_thread(db, thread_id=thread_id)
+    latest_by_type: dict[str, ArtifactFile] = {}
+    for artifact in artifacts:
+        existing = latest_by_type.get(artifact.artifact_type)
+        if existing is None or (artifact.updated_at, artifact.id) > (existing.updated_at, existing.id):
+            latest_by_type[artifact.artifact_type] = artifact
+    return sorted(
+        latest_by_type.values(),
+        key=lambda item: (item.updated_at, item.id),
+        reverse=True,
+    )
+
+
+async def list_ready_current_artifacts_by_thread(
+    db: AsyncSession,
+    *,
+    thread_id: str,
+) -> list[ArtifactFile]:
+    stmt = (
+        select(ArtifactFile)
+        .where(
+            ArtifactFile.thread_id == thread_id,
+            ArtifactFile.is_current.is_(True),
+            ArtifactFile.status == ARTIFACT_STATUS_READY,
+        )
+        .order_by(ArtifactFile.updated_at.desc(), ArtifactFile.id.desc())
+    )
+    result = await db.execute(stmt)
+    return [
+        artifact
+        for artifact in result.scalars().all()
+        if artifact.thread_id == thread_id
+        and artifact.is_current
+        and artifact.status == ARTIFACT_STATUS_READY
+    ]
+
+
+async def list_latest_ready_current_artifacts_by_thread(
+    db: AsyncSession,
+    *,
+    thread_id: str,
+) -> list[ArtifactFile]:
+    artifacts = await list_ready_current_artifacts_by_thread(db, thread_id=thread_id)
+    latest_by_type: dict[str, ArtifactFile] = {}
+    for artifact in artifacts:
+        existing = latest_by_type.get(artifact.artifact_type)
+        if existing is None or (artifact.updated_at, artifact.id) > (existing.updated_at, existing.id):
+            latest_by_type[artifact.artifact_type] = artifact
+    return sorted(
+        latest_by_type.values(),
+        key=lambda item: (item.updated_at, item.id),
+        reverse=True,
+    )
 
 
 async def create_running_artifact(
@@ -120,6 +234,9 @@ async def create_running_artifact(
     artifact_type: ArtifactType,
     run_id: str,
     title: str | None = None,
+    parent_artifact_id: int | None = None,
+    root_artifact_id: int | None = None,
+    revision_number: int | None = None,
 ) -> ArtifactFile:
     await ensure_plan_exists(db, plan_id)
     await ensure_thread_belongs_to_plan(db, plan_id, thread_id)
@@ -134,11 +251,17 @@ async def create_running_artifact(
     )
     extension = Path(original_name).suffix.lower()
     mime_type = ARTIFACT_MIME_TYPES.get(extension, _guess_mime_type(original_name))
+    initial_revision = revision_number or 1
+    is_current = parent_artifact_id is None
 
     artifact = ArtifactFile(
         plan_id=plan_id,
         thread_id=thread_id,
         artifact_type=artifact_type,
+        parent_artifact_id=parent_artifact_id,
+        root_artifact_id=root_artifact_id,
+        revision_number=initial_revision,
+        is_current=is_current,
         title=normalized_title,
         original_name=original_name,
         stored_name=stored_name,
@@ -152,7 +275,33 @@ async def create_running_artifact(
     db.add(artifact)
     await db.commit()
     await db.refresh(artifact)
+
+    if artifact.root_artifact_id is None:
+        artifact.root_artifact_id = artifact.id
+        await db.commit()
+        await db.refresh(artifact)
+
     return artifact
+
+
+async def create_revision_artifact(
+    db: AsyncSession,
+    *,
+    source_artifact: ArtifactFile,
+    run_id: str,
+    title: str | None = None,
+) -> ArtifactFile:
+    return await create_running_artifact(
+        db,
+        plan_id=source_artifact.plan_id,
+        thread_id=source_artifact.thread_id,
+        artifact_type=source_artifact.artifact_type,  # type: ignore[arg-type]
+        run_id=run_id,
+        title=title or source_artifact.title,
+        parent_artifact_id=source_artifact.id,
+        root_artifact_id=source_artifact.root_artifact_id or source_artifact.id,
+        revision_number=(source_artifact.revision_number or 1) + 1,
+    )
 
 
 async def mark_artifact_ready(
@@ -170,6 +319,17 @@ async def mark_artifact_ready(
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_path, destination_path)
 
+    current_stmt = select(ArtifactFile).where(
+        ArtifactFile.thread_id == artifact.thread_id,
+        ArtifactFile.artifact_type == artifact.artifact_type,
+        ArtifactFile.is_current.is_(True),
+        ArtifactFile.id != artifact.id,
+    )
+    current_result = await db.execute(current_stmt)
+    for current_artifact in current_result.scalars().all():
+        current_artifact.is_current = False
+        current_artifact.updated_at = datetime.now(timezone.utc)
+
     artifact.title = (title or artifact.title).strip() or artifact.title
     artifact.original_name = source_path.name
     artifact.extension = source_path.suffix.lower()
@@ -180,6 +340,7 @@ async def mark_artifact_ready(
     artifact.size_bytes = destination_path.stat().st_size
     artifact.storage_path = str(destination_path)
     artifact.status = ARTIFACT_STATUS_READY
+    artifact.is_current = True
     artifact.error_message = None
     artifact.updated_at = datetime.now(timezone.utc)
     await db.commit()
@@ -199,20 +360,6 @@ async def mark_artifact_failed(
     await db.commit()
     await db.refresh(artifact)
     return artifact
-
-
-async def list_artifacts_by_thread(
-    db: AsyncSession,
-    *,
-    thread_id: str,
-) -> list[ArtifactFile]:
-    stmt = (
-        select(ArtifactFile)
-        .where(ArtifactFile.thread_id == thread_id)
-        .order_by(ArtifactFile.created_at.desc(), ArtifactFile.id.desc())
-    )
-    result = await db.execute(stmt)
-    return list(result.scalars().all())
 
 
 async def get_artifact_by_id(

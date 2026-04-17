@@ -410,6 +410,47 @@ class WorkspaceManager:
             "overwrite": overwrite,
         }
 
+    def replace_text(
+        self,
+        config: Any,
+        *,
+        relative_path: str,
+        old_text: str,
+        new_text: str,
+        count: int = 0,
+    ) -> dict[str, Any]:
+        if not old_text:
+            raise WorkspaceValidationError("old_text must not be empty.")
+
+        paths = get_workspace_paths(config)
+        resolved = _resolve_workspace_path(paths.workspace_root, relative_path)
+        if not resolved.is_file():
+            raise WorkspaceValidationError(f"Workspace file '{relative_path}' was not found.")
+
+        try:
+            content = resolved.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise WorkspaceValidationError(
+                f"Workspace file '{relative_path}' is not UTF-8 text."
+            ) from exc
+
+        occurrences = content.count(old_text)
+        if occurrences == 0:
+            raise WorkspaceValidationError(
+                f"Workspace file '{relative_path}' does not contain the requested old_text."
+            )
+
+        requested_count = count if count and count > 0 else occurrences
+        replace_count = min(occurrences, requested_count)
+        updated_content = content.replace(old_text, new_text, requested_count)
+        resolved.write_text(updated_content, encoding="utf-8")
+        return {
+            "workspace_root": str(paths.workspace_root),
+            "path": resolved.relative_to(paths.workspace_root).as_posix(),
+            "occurrences_found": occurrences,
+            "occurrences_replaced": replace_count,
+        }
+
     def run_code(
         self,
         config: Any,
@@ -500,6 +541,47 @@ class WorkspaceToolset:
             return json.dumps(payload, ensure_ascii=False)
 
         @tool
+        def replace_workspace_text(
+            relative_path: str,
+            old_text: str,
+            new_text: str,
+            count: int = 0,
+            *,
+            runtime: ToolRuntime,
+        ) -> str:
+            """Replace exact UTF-8 text inside a workspace file."""
+            emit_progress(
+                runtime.config,
+                "code_preparation",
+                "running",
+                detail=f"Replacing text in workspace file {relative_path}",
+            )
+            try:
+                payload = self.manager.replace_text(
+                    runtime.config,
+                    relative_path=relative_path,
+                    old_text=old_text,
+                    new_text=new_text,
+                    count=count,
+                )
+            except Exception:
+                emit_progress(
+                    runtime.config,
+                    "code_preparation",
+                    "failed",
+                    detail=f"Failed to replace text in workspace file {relative_path}",
+                )
+                raise
+
+            emit_progress(
+                runtime.config,
+                "code_preparation",
+                "success",
+                detail=f"Replaced text in workspace file {relative_path}",
+            )
+            return json.dumps(payload, ensure_ascii=False)
+
+        @tool
         def run_workspace_code(
             language: Literal["python", "node"],
             entrypoint: str,
@@ -539,10 +621,12 @@ class WorkspaceToolset:
         self.list_workspace_files = list_workspace_files
         self.read_workspace_file = read_workspace_file
         self.write_workspace_file = write_workspace_file
+        self.replace_workspace_text = replace_workspace_text
         self.run_workspace_code = run_workspace_code
         self.tools = [
             list_workspace_files,
             read_workspace_file,
             write_workspace_file,
+            replace_workspace_text,
             run_workspace_code,
         ]

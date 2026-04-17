@@ -81,6 +81,10 @@ class ArtifactFile(BaseModel):
     thread_id: str
     extension: str
     size_bytes: int
+    parent_artifact_id: int | None = None
+    root_artifact_id: int | None = None
+    revision_number: int | None = None
+    is_current: bool | None = None
     url: str | None = None
     preview_url: str | None = None
     error_message: str | None = None

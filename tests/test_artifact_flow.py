@@ -22,6 +22,9 @@ class _FakeScalarResult:
     def all(self):
         return self._items
 
+    def first(self):
+        return self._items[0] if self._items else None
+
 
 class _FakeExecuteResult:
     def __init__(self, items):
@@ -128,6 +131,135 @@ def test_artifact_service_creates_persists_and_lists_artifacts(
 
         artifacts = await artifact_service.list_artifacts_by_thread(db, thread_id="thread-1")
         assert [artifact.id for artifact in artifacts] == [failed.id, ready.id]
+
+    asyncio.run(run())
+
+
+def test_artifact_service_creates_revision_versions_and_updates_current_flags(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    async def _noop(*args, **kwargs):
+        _ = args, kwargs
+        return None
+
+    async def run() -> None:
+        monkeypatch.setenv("FILE_STORAGE_ROOT", str(tmp_path))
+        monkeypatch.setattr(artifact_service, "ensure_plan_exists", _noop)
+        monkeypatch.setattr(artifact_service, "ensure_thread_belongs_to_plan", _noop)
+        db = FakeAsyncSession()
+
+        base = await artifact_service.create_running_artifact(
+            db,
+            plan_id=1,
+            thread_id="thread-1",
+            artifact_type="html-game",
+            run_id="run-base",
+            title="quiz",
+        )
+        generated_html = tmp_path / "generated.html"
+        generated_html.write_text("<html>v1</html>", encoding="utf-8")
+        base = await artifact_service.mark_artifact_ready(db, base, output_path=generated_html, title="quiz")
+
+        revision = await artifact_service.create_revision_artifact(
+            db,
+            source_artifact=base,
+            run_id="run-revision",
+        )
+        assert revision.parent_artifact_id == base.id
+        assert revision.root_artifact_id == base.root_artifact_id
+        assert revision.revision_number == 2
+        assert revision.is_current is False
+
+        revised_html = tmp_path / "revised.html"
+        revised_html.write_text("<html>v2</html>", encoding="utf-8")
+        revision = await artifact_service.mark_artifact_ready(
+            db,
+            revision,
+            output_path=revised_html,
+            title="quiz revised",
+        )
+
+        assert revision.is_current is True
+        assert base.is_current is False
+
+        current = await artifact_service.get_latest_current_artifact_by_type(
+            db,
+            thread_id="thread-1",
+            artifact_type="html-game",
+        )
+        assert current is not None
+        assert current.id == revision.id
+
+        visible = await artifact_service.list_artifacts_by_thread(db, thread_id="thread-1")
+        assert visible[0].id == revision.id
+
+        history = await artifact_service.list_artifacts_by_thread(
+            db,
+            thread_id="thread-1",
+            include_history=True,
+        )
+        assert [artifact.id for artifact in history] == [revision.id, base.id]
+
+    asyncio.run(run())
+
+
+def test_artifact_service_lists_only_ready_current_artifacts_for_revision_catalog(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    async def _noop(*args, **kwargs):
+        _ = args, kwargs
+        return None
+
+    async def run() -> None:
+        monkeypatch.setenv("FILE_STORAGE_ROOT", str(tmp_path))
+        monkeypatch.setattr(artifact_service, "ensure_plan_exists", _noop)
+        monkeypatch.setattr(artifact_service, "ensure_thread_belongs_to_plan", _noop)
+        db = FakeAsyncSession()
+
+        ready = await artifact_service.create_running_artifact(
+            db,
+            plan_id=1,
+            thread_id="thread-1",
+            artifact_type="ppt",
+            run_id="run-ready",
+            title="slides",
+        )
+        ready_file = tmp_path / "slides.pptx"
+        ready_file.write_text("ppt-ready", encoding="utf-8")
+        ready = await artifact_service.mark_artifact_ready(db, ready, output_path=ready_file, title="slides")
+
+        running = await artifact_service.create_running_artifact(
+            db,
+            plan_id=1,
+            thread_id="thread-1",
+            artifact_type="docx",
+            run_id="run-running",
+            title="lesson",
+        )
+        failed = await artifact_service.create_running_artifact(
+            db,
+            plan_id=1,
+            thread_id="thread-1",
+            artifact_type="html-game",
+            run_id="run-failed",
+            title="game",
+        )
+        failed = await artifact_service.mark_artifact_failed(
+            db,
+            failed,
+            error_message="generation failed",
+        )
+
+        latest_ready = await artifact_service.list_latest_ready_current_artifacts_by_thread(
+            db,
+            thread_id="thread-1",
+        )
+
+        assert [artifact.id for artifact in latest_ready] == [ready.id]
+        assert running.id not in [artifact.id for artifact in latest_ready]
+        assert failed.id not in [artifact.id for artifact in latest_ready]
 
     asyncio.run(run())
 
