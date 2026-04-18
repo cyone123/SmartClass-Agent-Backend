@@ -18,10 +18,8 @@ from langchain.agents.middleware import (
     AgentMiddleware,
     AgentState,
     FilesystemFileSearchMiddleware,
-    HostExecutionPolicy,
     ModelRequest,
     ModelResponse,
-    ShellToolMiddleware,
     ToolRetryMiddleware,
 )
 from langchain.messages import SystemMessage
@@ -61,7 +59,10 @@ from app.models.file import ArtifactFile, AttachmentFile
 from app.services import artifact_service, file_service
 
 ArtifactType = Literal["ppt", "docx", "html-game"]
-ArtifactEventEmitter = Callable[[dict[str, Any]], None]
+StreamEventEmitter = Callable[[dict[str, Any]], None]
+ArtifactEventEmitter = StreamEventEmitter
+ArtifactTraceEventEmitter = StreamEventEmitter
+ArtifactTraceEntryKind = Literal["status", "tool_call", "tool_result", "ai_message"]
 
 ROOT_STREAMING_NODES = {
     "normal_chat_node",
@@ -106,6 +107,7 @@ ARTIFACT_SOURCE_FILENAMES: dict[ArtifactType, str] = {
     "docx": "source_artifact.docx",
     "html-game": "source_artifact.html",
 }
+ARTIFACT_TRACE_CONTENT_MAX_LENGTH = 1600
 
 
 class SkillAwareAgentState(AgentState[Any], total=False):
@@ -118,6 +120,7 @@ def get_thread_config(
     run_id: str | None = None,
     progress_reporter: ProgressReporter | None = None,
     artifact_event_emitter: ArtifactEventEmitter | None = None,
+    artifact_trace_event_emitter: ArtifactTraceEventEmitter | None = None,
 ) -> RunnableConfig:
     configurable: dict[str, Any] = {
         "thread_id": thread_id,
@@ -128,6 +131,8 @@ def get_thread_config(
         configurable["progress_reporter"] = progress_reporter
     if artifact_event_emitter is not None:
         configurable["artifact_event_emitter"] = artifact_event_emitter
+    if artifact_trace_event_emitter is not None:
+        configurable["artifact_trace_event_emitter"] = artifact_trace_event_emitter
     return {"configurable": configurable}
 
 
@@ -142,6 +147,13 @@ def _get_configurable_value(config: RunnableConfig | None, key: str) -> Any:
 
 def _get_artifact_event_emitter(config: RunnableConfig | None) -> ArtifactEventEmitter | None:
     emitter = _get_configurable_value(config, "artifact_event_emitter")
+    return emitter if callable(emitter) else None
+
+
+def _get_artifact_trace_event_emitter(
+    config: RunnableConfig | None,
+) -> ArtifactTraceEventEmitter | None:
+    emitter = _get_configurable_value(config, "artifact_trace_event_emitter")
     return emitter if callable(emitter) else None
 
 
@@ -163,6 +175,44 @@ def _message_to_text(message: AnyMessage) -> str:
         return "".join(text_parts)
 
     return str(content)
+
+
+def _normalize_trace_content(
+    value: Any,
+    *,
+    max_length: int = ARTIFACT_TRACE_CONTENT_MAX_LENGTH,
+) -> str:
+    if value is None:
+        return ""
+
+    if isinstance(value, bytes):
+        text = f"<binary content: {len(value)} bytes>"
+    elif isinstance(value, BaseMessage):
+        text = _message_to_text(value)
+    elif isinstance(value, str):
+        text = value
+    elif isinstance(value, (dict, list, tuple)):
+        text = json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    else:
+        text = str(value)
+
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"[ \t]+\n", "\n", normalized)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    normalized = normalized.strip()
+    if len(normalized) <= max_length:
+        return normalized
+    return f"{normalized[: max_length - 1].rstrip()}…"
+
+
+def _artifact_trace_tool_call_title(tool_call: dict[str, Any]) -> str:
+    tool_name = str(tool_call.get("name") or "unknown")
+    return f"调用工具 · {tool_name}"
+
+
+def _artifact_trace_tool_result_title(message: ToolMessage) -> str:
+    tool_name = message.name or "unknown"
+    return f"工具结果 · {tool_name}"
 
 
 def get_final_response_text(messages: list[AnyMessage]) -> str:
@@ -561,28 +611,11 @@ class AgentRuntime:
         self._thread_locks: dict[str | None, asyncio.Lock] = {}
         self._thread_locks_guard = asyncio.Lock()
 
-        if os.name == "nt":
-            shell_command = ["cmd.exe", "/Q", "/K"]
-        else:
-            shell_command = ["/bin/bash"]
-
         base_middleware = [
             FilesystemFileSearchMiddleware(
                 root_path=str(self.backend_root),
                 use_ripgrep=True,
             ),
-            # ShellToolMiddleware(
-            #     workspace_root=str(self.backend_root / "workspace"),
-            #     execution_policy=HostExecutionPolicy(),
-            #     shell_command=shell_command,
-            #     tool_description=(
-            #         "Shell for system-command tasks only. "
-            #         "Use cmd because you are working in Windows now. "
-            #         "Use this tool only when a task explicitly requires OS or CLI execution. "
-            #         "Do not use shell to run Python or Node.js code or to run the scripts of skills. "
-            #         "Use workspace tools for temporary code and `run_skill_script` for scripts bundled with a skill."
-            #     ),
-            # ),
             SkillPromptMiddleware(skill_registry),
             SkillExecutionPolicyMiddleware(skill_registry),
             ToolRetryMiddleware(
@@ -906,7 +939,7 @@ class AgentRuntime:
                     "请你扮演用户，生成恰好 3 条最自然、最有价值的简短的中文回复。"
                     "请严格使用换行分隔每一条建议，每行只写一条。"
                     "每条都必须是用户可以直接发送给 AI 的完整句子。"
-                    "要简洁、清晰、和刚刚的 AI 回复紧密相关。"
+                    "要简洁、清晰、和刚刚的AI消息紧密相关。"
                     "不要编号，不要解释，只返回 3 行纯文本。"
                 )
             ),
@@ -937,6 +970,72 @@ class AgentRuntime:
 
     def _artifact_run_id(self, run_id: str, artifact_type: ArtifactType) -> str:
         return f"{run_id}-{artifact_type}"
+
+    async def _stream_artifact_agent_updates(
+        self,
+        agent_runnable: Any,
+        *,
+        prompt: str,
+        agent_config: RunnableConfig,
+        emit_trace_entry: Callable[..., None],
+    ) -> dict[str, Any] | None:
+        last_ai_message: AIMessage | None = None
+
+        async for chunk in agent_runnable.astream(
+            {"messages": [{"role": "user", "content": prompt}]},
+            config=agent_config,
+            stream_mode="updates",
+            version="v2",
+        ):
+            if chunk.get("type") != "updates":
+                continue
+
+            chunk_data = chunk.get("data")
+            if not isinstance(chunk_data, dict):
+                continue
+
+            for step, data in chunk_data.items():
+                if not isinstance(data, dict):
+                    continue
+
+                raw_messages = data.get("messages") or []
+                if step == "model":
+                    model_messages = [
+                        message for message in raw_messages if isinstance(message, AIMessage)
+                    ]
+                    if not model_messages:
+                        continue
+
+                    last_ai_message = model_messages[-1]
+                    ai_text = _normalize_trace_content(_message_to_text(last_ai_message))
+                    if ai_text:
+                        emit_trace_entry(
+                            "ai_message",
+                            "AI 输出",
+                            content=ai_text,
+                        )
+
+                    for tool_call in last_ai_message.tool_calls or []:
+                        emit_trace_entry(
+                            "tool_call",
+                            _artifact_trace_tool_call_title(tool_call),
+                            content=_normalize_trace_content(tool_call.get("args")),
+                        )
+
+                if step == "tools":
+                    tool_messages = [
+                        message for message in raw_messages if isinstance(message, ToolMessage)
+                    ]
+                    for tool_message in tool_messages:
+                        emit_trace_entry(
+                            "tool_result",
+                            _artifact_trace_tool_result_title(tool_message),
+                            content=_normalize_trace_content(tool_message.content),
+                        )
+
+        if last_ai_message is None:
+            return None
+        return {"messages": [last_ai_message]}
 
     def _build_artifact_prompt(self, state: TeachingAssistantState, artifact_type: ArtifactType) -> str:
         latest_user_messages = [
@@ -1227,6 +1326,7 @@ class AgentRuntime:
         plan_id = state.get("plan_id")
         artifact_title = _artifact_display_name(artifact_type)
         emitter = _get_artifact_event_emitter(config)
+        trace_event_emitter = _get_artifact_trace_event_emitter(config)
 
         if not thread_id or not run_id or plan_id is None:
             error_message = "Missing thread_id, run_id, or plan_id for artifact job."
@@ -1237,6 +1337,44 @@ class AgentRuntime:
         sub_run_id = self._artifact_run_id(run_id, artifact_type)
         artifact_record: ArtifactFile | None = None
         source_artifact: dict[str, Any] | None = None
+        trace_entry_index = 0
+
+        def emit_trace_entry(
+            kind: ArtifactTraceEntryKind,
+            title: str,
+            *,
+            content: Any | None = None,
+            status: str | None = None,
+        ) -> None:
+            nonlocal trace_entry_index
+            if trace_event_emitter is None:
+                return
+
+            trace_entry_index += 1
+            entry: dict[str, Any] = {
+                "entry_id": f"{sub_run_id}-trace-{trace_entry_index}",
+                "kind": kind,
+                "title": title,
+            }
+            normalized_content = _normalize_trace_content(content)
+            if normalized_content:
+                entry["content"] = normalized_content
+            if status:
+                entry["status"] = status
+
+            trace_event_emitter(
+                {
+                    "event": "artifact_trace",
+                    "data": {
+                        "run_id": run_id,
+                        "artifact_run_id": sub_run_id,
+                        "artifact_type": artifact_type,
+                        "artifact_title": artifact_title,
+                        "mode": mode,
+                        "entry": entry,
+                    },
+                }
+            )
 
         try:
             async with AsyncSessionLocal() as db:
@@ -1281,6 +1419,17 @@ class AgentRuntime:
                         }
                     )
 
+            emit_trace_entry(
+                "status",
+                f"开始{'生成' if mode == 'create' else '修改'}{artifact_title}",
+                content=(
+                    "正在准备工作区并启动产物 agent。"
+                    if mode == "revise"
+                    else "正在启动产物 agent。"
+                ),
+                status="running",
+            )
+
             agent_config = get_thread_config(
                 self._artifact_agent_thread_id(thread_id, artifact_type),
                 run_id=sub_run_id,
@@ -1313,9 +1462,11 @@ class AgentRuntime:
                     agent_config=agent_config,
                 )
             )
-            invoke_result = await agent_runnable.ainvoke(
-                {"messages": [{"role": "user", "content": prompt}]},
-                config=agent_config,
+            invoke_result = await self._stream_artifact_agent_updates(
+                agent_runnable,
+                prompt=prompt,
+                agent_config=agent_config,
+                emit_trace_entry=emit_trace_entry,
             )
             output_path = self._find_generated_output(
                 agent_config,
@@ -1354,6 +1505,11 @@ class AgentRuntime:
             if isinstance(main_reporter, ProgressReporter):
                 detail = f"{artifact_title}已生成" if mode == "create" else f"{artifact_title}已更新"
                 main_reporter.emit(step_key, "success", detail=detail)
+            emit_trace_entry(
+                "status",
+                f"{artifact_title}{'生成完成' if mode == 'create' else '修改完成'}",
+                status="success",
+            )
             return {
                 state_key: _success_subagent_result(
                     artifact_type,
@@ -1387,6 +1543,12 @@ class AgentRuntime:
                 main_reporter.emit(step_key, "failed", detail=error_message)
                 if mode == "revise":
                     main_reporter.emit("artifact_revision_prepare", "failed", detail=error_message)
+            emit_trace_entry(
+                "status",
+                f"{artifact_title}{'生成失败' if mode == 'create' else '修改失败'}",
+                content=error_message,
+                status="failed",
+            )
             return {
                 state_key: _failed_subagent_result(
                     artifact_type,
@@ -1507,6 +1669,9 @@ class AgentRuntime:
         def emit_artifact_event(event: dict[str, Any]) -> None:
             enqueue_event(event)
 
+        def emit_artifact_trace_event(event: dict[str, Any]) -> None:
+            enqueue_event(event)
+
         progress_tracker = ProgressTracker(run_id=run_id)
         progress_reporter = ProgressReporter(
             progress_tracker,
@@ -1546,6 +1711,7 @@ class AgentRuntime:
                             run_id=run_id,
                             progress_reporter=progress_reporter,
                             artifact_event_emitter=emit_artifact_event,
+                            artifact_trace_event_emitter=emit_artifact_trace_event,
                         ),
                         stream_mode="messages",
                         subgraphs=True,
