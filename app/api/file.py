@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import logging
+import os
+import re
+import tempfile
+from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
+from urllib.request import Request as UrlRequest
+from urllib.request import urlopen
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -11,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_public_api_base_url
 from app.core.file_ingestion import FileIngestionRuntime, get_file_ingestion_runtime
-from app.core.rag import RagRuntime, get_rag_runtime
+from app.core.rag import RagRuntime, get_rag_runtime, supports_knowledge_file_extension
 from app.core.speech import SpeechRuntime, get_speech_runtime
 from app.dependencies.db import get_db
 from app.models.file import ArtifactFile as ArtifactFileModel
@@ -27,10 +36,20 @@ from app.schemas.response import success_response
 from app.services import artifact_service, file_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 FileKind = Literal["knowledge", "artifact"]
 OfficePreviewExtensions = {"doc", "docx", "ppt", "pptx", "pdf"}
 HTML_PREVIEW_EXTENSIONS = {"html", "htm"}
+ONLYOFFICE_SAVE_STATUSES = {2, 6}
+ONLYOFFICE_KEY_PATTERN = re.compile(r"^(knowledge|artifact)-(?P<file_id>\d+)-\d+$")
+REMOTE_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+
+
+class _DownloadedFileMetadata:
+    def __init__(self, *, size_bytes: int, sha256: str) -> None:
+        self.size_bytes = size_bytes
+        self.sha256 = sha256
 
 
 def _build_public_url(request: Request, route_name: str, **path_params: object) -> str:
@@ -110,6 +129,105 @@ async def _require_ready_html_artifact(
         )
 
     return artifact
+
+
+def _parse_onlyoffice_key(key: str | None) -> tuple[FileKind, int]:
+    normalized = (key or "").strip()
+    match = ONLYOFFICE_KEY_PATTERN.fullmatch(normalized)
+    if match is None:
+        raise ValueError("Invalid ONLYOFFICE document key.")
+
+    file_kind = normalized.split("-", 1)[0]
+    return file_kind, int(match.group("file_id"))
+
+
+def _download_onlyoffice_document(
+    *,
+    url: str,
+    destination_path: Path,
+) -> _DownloadedFileMetadata:
+    parsed_url = urlsplit(url)
+    if parsed_url.scheme not in {"http", "https"}:
+        raise ValueError("ONLYOFFICE callback url must use http or https.")
+
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_path_raw = tempfile.mkstemp(
+        prefix=".onlyoffice-",
+        suffix=destination_path.suffix or ".tmp",
+        dir=destination_path.parent,
+    )
+    temp_path = Path(temp_path_raw)
+    sha256 = hashlib.sha256()
+    size_bytes = 0
+
+    try:
+        with os.fdopen(fd, "wb") as output_file:
+            request = UrlRequest(
+                url,
+                headers={"User-Agent": "SmartClass-OnlyOffice-Callback/1.0"},
+            )
+            with urlopen(request, timeout=60) as response:
+                while True:
+                    chunk = response.read(REMOTE_DOWNLOAD_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    output_file.write(chunk)
+                    sha256.update(chunk)
+                    size_bytes += len(chunk)
+
+        temp_path.replace(destination_path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+    return _DownloadedFileMetadata(
+        size_bytes=size_bytes,
+        sha256=sha256.hexdigest(),
+    )
+
+
+async def _save_onlyoffice_file(
+    *,
+    db: AsyncSession,
+    file_kind: FileKind,
+    file_id: int,
+    file_url: str,
+    ingestion_runtime: FileIngestionRuntime,
+) -> None:
+    file_record = await _get_file_record(db, file_kind=file_kind, file_id=file_id)
+    if file_record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{file_kind.title()} file {file_id} not found.",
+        )
+
+    destination_path = Path(file_record.storage_path)
+    metadata = await asyncio.to_thread(
+        _download_onlyoffice_document,
+        url=file_url,
+        destination_path=destination_path,
+    )
+
+    file_record.size_bytes = metadata.size_bytes
+    file_record.updated_at = datetime.now(timezone.utc)
+
+    if file_kind == "knowledge":
+        file_record.sha256 = metadata.sha256
+        file_record.error_message = None
+        if supports_knowledge_file_extension(file_record.extension):
+            file_record.status = file_service.FILE_STATUS_UPLOADED
+            file_record.chunk_count = 0
+            file_record.indexed_at = None
+        await db.commit()
+        await db.refresh(file_record)
+        if supports_knowledge_file_extension(file_record.extension):
+            await ingestion_runtime.enqueue(file_record.id)
+        return
+
+    file_record.status = artifact_service.ARTIFACT_STATUS_READY
+    file_record.error_message = None
+    await db.commit()
+    await db.refresh(file_record)
 
 
 @router.get("/file/knowledgeFile", response_model=KnowledgeFileListResponse)
@@ -384,7 +502,7 @@ async def get_file_config(
         "documentType": get_document_type(document_title),
         "editorConfig": {
             "lang": "zh",
-            "mode": "view",
+            "mode": "edit",
             "callbackUrl": callback_url,
         },
     }
@@ -400,9 +518,43 @@ async def get_legacy_file_config(
 
 
 @router.post("/file/callback", name="handle_callback")
-async def handle_callback(request: Request):
-    body = await request.json()
-    print(str(body))
+async def handle_callback(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    ingestion_runtime: FileIngestionRuntime = Depends(get_file_ingestion_runtime),
+):
+    try:
+        body = await request.json()
+        callback_status = int(body.get("status"))
+        document_key = body.get("key")
+
+        if callback_status not in ONLYOFFICE_SAVE_STATUSES:
+            logger.info(
+                "Ignoring ONLYOFFICE callback without save action.",
+                extra={"status": callback_status, "key": document_key},
+            )
+            return {"error": 0}
+
+        file_url = (body.get("url") or "").strip()
+        if not file_url:
+            logger.warning(
+                "ONLYOFFICE callback is missing a save url.",
+                extra={"status": callback_status, "key": document_key},
+            )
+            return {"error": 1}
+
+        file_kind, file_id = _parse_onlyoffice_key(document_key)
+        await _save_onlyoffice_file(
+            db=db,
+            file_kind=file_kind,
+            file_id=file_id,
+            file_url=file_url,
+            ingestion_runtime=ingestion_runtime,
+        )
+    except Exception:
+        logger.exception("Failed to process ONLYOFFICE callback.")
+        return {"error": 1}
+
     return {"error": 0}
 
 

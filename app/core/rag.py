@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import zipfile
+from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 from dotenv import load_dotenv
 from fastapi import Request
@@ -15,6 +18,90 @@ from sqlalchemy import text
 from app.dependencies.db import async_engine
 
 load_dotenv()
+
+DOCX_XML_NAMESPACE = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+TEXT_FILE_ENCODINGS = ("utf-8", "utf-8-sig", "gb18030", "gbk")
+SUPPORTED_TEXT_FILE_EXTENSIONS = {".txt", ".md", ".markdown", ".csv", ".json"}
+SUPPORTED_KNOWLEDGE_FILE_EXTENSIONS = {".pdf", ".docx", *SUPPORTED_TEXT_FILE_EXTENSIONS}
+
+
+def normalize_knowledge_file_extension(extension: str | None) -> str:
+    return (extension or "").strip().lower()
+
+
+def supports_knowledge_file_extension(extension: str | None) -> bool:
+    return normalize_knowledge_file_extension(extension) in SUPPORTED_KNOWLEDGE_FILE_EXTENSIONS
+
+
+def _split_documents(documents: list[Document]) -> list[Document]:
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=250,
+        chunk_overlap=20,
+    )
+    return text_splitter.split_documents(documents)
+
+
+def _load_docx_document(file_path: str) -> list[Document]:
+    path = Path(file_path)
+    try:
+        with zipfile.ZipFile(path) as archive:
+            xml_bytes = archive.read("word/document.xml")
+    except KeyError as exc:
+        raise ValueError(f"DOCX document.xml not found in {path.name}.") from exc
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"Invalid DOCX file: {path.name}.") from exc
+
+    try:
+        root = ElementTree.fromstring(xml_bytes)
+    except ElementTree.ParseError as exc:
+        raise ValueError(f"Unable to parse DOCX XML content: {path.name}.") from exc
+
+    paragraphs: list[str] = []
+    for paragraph in root.findall(".//w:p", DOCX_XML_NAMESPACE):
+        parts = [
+            node.text
+            for node in paragraph.findall(".//w:t", DOCX_XML_NAMESPACE)
+            if node.text
+        ]
+        text = "".join(parts).strip()
+        if text:
+            paragraphs.append(text)
+
+    content = "\n".join(paragraphs).strip()
+    if not content:
+        raise ValueError(f"No readable text content found in DOCX file: {path.name}.")
+
+    return [
+        Document(
+            page_content=content,
+            metadata={"source": str(path)},
+        )
+    ]
+
+
+def _read_text_file_content(file_path: str) -> str:
+    path = Path(file_path)
+    raw = path.read_bytes()
+    for encoding in TEXT_FILE_ENCODINGS:
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _load_text_document(file_path: str) -> list[Document]:
+    path = Path(file_path)
+    content = _read_text_file_content(file_path).strip()
+    if not content:
+        raise ValueError(f"No readable text content found in text file: {path.name}.")
+
+    return [
+        Document(
+            page_content=content,
+            metadata={"source": str(path)},
+        )
+    ]
 
 
 class RagRuntime:
@@ -64,13 +151,18 @@ class RagRuntime:
         return self
 
     async def load_and_split_file(self, file_path: str) -> list[Document]:
-        loader = PyPDFLoader(file_path)
-        documents = loader.load()
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=250,
-            chunk_overlap=20,
-        )
-        return text_splitter.split_documents(documents) 
+        extension = normalize_knowledge_file_extension(Path(file_path).suffix)
+        if extension == ".pdf":
+            loader = PyPDFLoader(file_path)
+            return _split_documents(loader.load())
+        if extension == ".docx":
+            return _split_documents(_load_docx_document(file_path))
+        if extension in SUPPORTED_TEXT_FILE_EXTENSIONS:
+            return _split_documents(_load_text_document(file_path))
+        raise ValueError(f"Unsupported extension for ingestion: {extension or 'unknown'}")
+
+    def supports_file_extension(self, extension: str | None) -> bool:
+        return supports_knowledge_file_extension(extension)
 
     def _get_vector_store(self) -> PGVectorStore:
         if self.vector_store is None:

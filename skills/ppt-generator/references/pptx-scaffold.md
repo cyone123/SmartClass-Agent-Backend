@@ -9,7 +9,7 @@
 将以下代码保存为 `workspace/ppt-output.js`，按注释替换内容：
 
 ```javascript
-const pptxgen = require("pptxgenjs");
+const pptxgen = require("pptxgenjs"); 
 const pres = new pptxgen();
 pres.layout = "LAYOUT_16x9";
 pres.title = "演示标题";  // ← 修改
@@ -17,21 +17,23 @@ pres.title = "演示标题";  // ← 修改
 // =============================================
 // 🎨 设计系统 — 无需改动，复用即可
 // =============================================
-const BG     = "000000";
-const CARD   = "1A1A1A";
-const CARD2  = "222222";
-const WHITE  = "FFFFFF";
-const GRAY1  = "AAAAAA";
-const GRAY2  = "666666";
-const GRAY3  = "333333";
-const BORDER = "2A2A2A";
+// 明亮、清晰的颜色方案，适合教学场景
+const BG     = "F1F8FF";  // 浅蓝色背景，清新明亮
+const CARD   = "B3E5FC";  // 浅蓝色卡片，突出但不刺眼
+const CARD2  = "FFEB3B";  // 柠檬黄卡片，温暖、活力
+const WHITE  = "FFFFFF";  // 白色，干净、简洁
+const GRAY1  = "D1D1D1";  // 浅灰色，柔和过渡
+const GRAY2  = "A4A4A4";  // 灰色，适合文字描述
+const GRAY3  = "707070";  // 深灰色，文本或次要元素
+const BORDER = "B0BEC5";  // 浅灰色边框，简洁不突兀
 
+// 推荐明亮清晰的品牌色，适合教学环境
 // ← 根据内容识别品牌色，例如：
 // 小米: "FF6900" | 华为: "CF0A2C" | 特斯拉: "CC0000"
 // 苹果: "0071E3" | 字节: "006EFF" | 阿里: "FF6A00"
 // 通用科技蓝: "00AEEF"
-const BRAND     = "FF6900";   // ← 改这里
-const BRAND_DIM = "1A0900";   // ← 改这里（品牌色暗化版，约10%亮度）
+const BRAND     = "00AEEF";   // 亮蓝色，清晰且具有活力
+const BRAND_DIM = "006F8E";   // 品牌色暗化版，约10%亮度，用于柔和的对比
 
 // makeShadow 必须是函数，每次调用返回新对象（pptxgenjs 会修改传入的对象）
 const makeShadow = () => ({ type:"outer", blur:8, offset:2, angle:135, color:"000000", opacity:0.25 });

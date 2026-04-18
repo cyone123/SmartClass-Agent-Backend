@@ -78,7 +78,7 @@ def _parse_allowed_extensions(raw: str | None, default: str) -> set[str]:
 def get_allowed_knowledge_upload_extensions() -> set[str]:
     return _parse_allowed_extensions(
         get_env("KNOWLEDGE_FILE_ALLOWED_EXTENSIONS"),
-        ".docx,.pdf",
+        ".docx,.pdf,.txt,.md,.markdown,.csv,.json",
     )
 
 

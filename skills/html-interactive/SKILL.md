@@ -53,13 +53,6 @@ Before writing code, identify:
 - what would benefit from interaction
 - what kind of experiment or animation would make the concept intuitive
 
-## Revising Existing HTML Artifacts
-
-- When the task is to revise an existing HTML artifact, first read `source_artifact.html` and `source_summary.json` from the workspace.
-- Prefer `replace_workspace_text` for localized copy, style, selector, or logic edits instead of rewriting the whole file.
-- Write the revised final HTML file into `AGENT_OUTPUT_DIR`, for example `revised-activity.html`.
-
-## Quality Bar
 Summarize internally:
 - concept target
 - learner level
@@ -68,7 +61,6 @@ Summarize internally:
 
 ### Step 2: Transform content into learning interactions
 Convert raw teaching content into modules such as:
-- concept overview
 - guided exploration
 - interactive experiment
 - animation demonstration
@@ -147,6 +139,22 @@ Check that:
 - interaction is not decorative noise
 - students can get feedback
 - the page can actually be used in teaching
+
+## UI Style Guidelines
+
+When generating the HTML page, please adhere to the following style principles:
+
+1. **Simplicity & Brightness**: 
+   - Keep the layout clean and uncluttered, using ample white space for a calm, inviting feel.
+   - The background should predominantly feature light colors (e.g., soft whites, pastel shades) to create a bright and airy atmosphere. Avoid overly dark or heavy designs that could feel overwhelming.
+   - Visual elements should be grand yet simple, reflecting a balance between professionalism and approachability, ideal for an academic setting.
+
+2. **Aesthetic & Elegant**: 
+   - Use elegant fonts, preferably sans-serif for readability, with consistent typography across headings, subheadings, and body text.
+   - Maintain a minimalist design, focusing on the content with visually appealing, subtle highlights (e.g., gentle use of accent colors).
+   - Ensure that the color scheme is harmonious, prioritizing legibility and user comfort over aesthetic flourishes.
+   - Make sure interactive components (buttons, sliders, forms) remain usable and visually appealing across all screen sizes.
+
 
 ## Revising Existing HTML Artifacts
 

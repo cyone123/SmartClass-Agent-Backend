@@ -615,7 +615,7 @@ async def process_file_ingestion(
     await mark_file_indexing(db, file_record)
 
     try:
-        if file_record.extension != ".pdf":
+        if not rag_runtime.supports_file_extension(file_record.extension):
             raise ValueError(f"Unsupported extension for ingestion: {file_record.extension}")
         if not file_record.storage_path or not Path(file_record.storage_path).exists():
             raise FileNotFoundError(f"Missing storage file: {file_record.storage_path}")
