@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Literal, Mapping, Optional
+from urllib.parse import urlparse
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -12,12 +14,44 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field
 
-from app.core.llm import llm, structured_output_llm
+from app.core.llm import (
+    get_structured_prompt_cache_retention,
+    is_structured_fallback_enabled,
+    is_structured_prompt_cache_enabled,
+    is_structured_warmup_enabled,
+    llm,
+    structured_fast_llm,
+    structured_output_llm,
+)
 from app.core.progress import emit_progress
 from app.core.rag import RagRuntime
 from app.core.state import TeachingAssistantState, TeachingMetadata
 
 ATTACHMENT_MESSAGE_PREFIX = "用户上传的附件内容，供当前轮对话参考：\n"
+STRUCTURED_METHOD = "json_schema"
+STRUCTURED_STRICT = True
+STRUCTURED_SCHEMA_CALL_COUNTS: dict[str, int] = {}
+INTENT_ROUTER_SYSTEM_PROMPT = (
+    "You are an intent router for a teacher-facing workflow. "
+    "You need to output in JSON format. "
+    "Return `artifact_revision` when the user is asking to edit, revise, update, or adjust an "
+    "already-generated artifact in the same thread. "
+    "Return `teaching_plan` for lesson preparation, teaching design, courseware, lesson-plan, or "
+    "interactive activity generation requests. "
+    "Return `normal_chat` for everything else. "
+    "Use the available artifact context below when deciding whether the user is referring to an "
+    "existing artifact."
+)
+METADATA_EXTRACTION_SYSTEM_PROMPT = (
+    "Extract structured teaching metadata for a teacher assistant. "
+    "Use only information explicitly provided by the user in the supplied conversation snippets. "
+    "Keep `subject`, `grade`, `topic`, and `course_duration` short. "
+    "Limit `core_points`, `key_points`, and `difficult_points` to at most 5 items each. "
+    "Keep `teaching_objectives` to one short sentence. "
+    "Fill missing fields with null. "
+    "Set `is_complete` to true only when the metadata is complete enough for retrieval and "
+    "instructional design."
+)
 
 INTERRUPT_FOR_USERINPUT_NODE = "interrupt_for_userinput"
 METADATA_REVIEW_INTERRUPT_NODE = "metadata_review_interrupt_node"
@@ -97,15 +131,25 @@ class ConversationRoute(BaseModel):
     )
 
 
-router = structured_output_llm.with_structured_output(
+router = structured_fast_llm.with_structured_output(
     ConversationRoute,
-    method="json_schema",
-    strict=True,
+    method=STRUCTURED_METHOD,
+    strict=STRUCTURED_STRICT,
 )
-metadata_extractor = structured_output_llm.with_structured_output(
+router_fallback = structured_output_llm.with_structured_output(
+    ConversationRoute,
+    method=STRUCTURED_METHOD,
+    strict=STRUCTURED_STRICT,
+)
+metadata_extractor = structured_fast_llm.with_structured_output(
     TeachingMetadata,
-    method="json_schema",
-    strict=True,
+    method=STRUCTURED_METHOD,
+    strict=STRUCTURED_STRICT,
+)
+metadata_extractor_fallback = structured_output_llm.with_structured_output(
+    TeachingMetadata,
+    method=STRUCTURED_METHOD,
+    strict=STRUCTURED_STRICT,
 )
 
 
@@ -220,6 +264,171 @@ def _message_to_text(message: AIMessage | HumanMessage) -> str:
                 parts.append(str(item.get("text", "")))
         return "".join(parts)
     return str(content)
+
+
+def _to_prompt_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _structured_model_name(model: Any) -> str:
+    return str(
+        getattr(model, "model_name", None)
+        or getattr(model, "model", None)
+        or "unknown"
+    )
+
+
+def _structured_base_url(model: Any) -> str:
+    return str(
+        getattr(model, "openai_api_base", None)
+        or getattr(model, "base_url", None)
+        or ""
+    )
+
+
+def _structured_provider_tag(model: Any) -> str:
+    base_url = _structured_base_url(model)
+    if not base_url:
+        return "default"
+    parsed = urlparse(base_url if "://" in base_url else f"https://{base_url}")
+    provider_tag = parsed.netloc or parsed.path or base_url
+    return provider_tag.lower()
+
+
+def _estimate_input_size(messages: Sequence[BaseMessage]) -> int:
+    return sum(
+        len(_message_to_text(message))
+        for message in messages
+        if isinstance(message, (AIMessage, HumanMessage))
+    )
+
+
+def _estimate_output_size(response: Any) -> int:
+    if response is None:
+        return 0
+    if isinstance(response, BaseModel):
+        return len(response.model_dump_json())
+    if isinstance(response, Mapping):
+        return len(_to_prompt_json(dict(response)))
+    return len(str(response))
+
+
+def _register_schema_call(schema_name: str) -> tuple[str, int]:
+    invocation_index = STRUCTURED_SCHEMA_CALL_COUNTS.get(schema_name, 0) + 1
+    STRUCTURED_SCHEMA_CALL_COUNTS[schema_name] = invocation_index
+    return ("cold" if invocation_index == 1 else "warm"), invocation_index
+
+
+def _build_structured_invoke_kwargs(schema_name: str, model: Any) -> dict[str, Any]:
+    if not is_structured_prompt_cache_enabled():
+        return {}
+    provider_tag = _structured_provider_tag(model)
+    model_name = _structured_model_name(model)
+    invoke_kwargs: dict[str, Any] = {
+        "prompt_cache_key": f"structured:{schema_name}:{provider_tag}:{model_name}",
+    }
+    retention = get_structured_prompt_cache_retention()
+    if retention:
+        invoke_kwargs["prompt_cache_retention"] = retention
+    return invoke_kwargs
+
+
+def _log_structured_call(
+    *,
+    schema_name: str,
+    model: Any,
+    duration_ms: float,
+    messages: Sequence[BaseMessage],
+    response: Any,
+    validation_success: bool,
+    is_fallback: bool,
+    error: Exception | None = None,
+) -> None:
+    schema_phase, schema_invocation_index = _register_schema_call(schema_name)
+    payload = {
+        "event": "structured_output_latency",
+        "schema_name": schema_name,
+        "schema_phase": schema_phase,
+        "schema_invocation_index": schema_invocation_index,
+        "model": _structured_model_name(model),
+        "base_url": _structured_base_url(model),
+        "provider_tag": _structured_provider_tag(model),
+        "structured_method": STRUCTURED_METHOD,
+        "strict": STRUCTURED_STRICT,
+        "duration_ms": round(duration_ms, 2),
+        "input_message_count": len(messages),
+        "estimated_input_chars_or_tokens": _estimate_input_size(messages),
+        "output_chars": _estimate_output_size(response),
+        "validation_success": validation_success,
+        "is_fallback": is_fallback,
+    }
+    if error is not None:
+        payload["error"] = str(error)
+    print(f"[structured_output] {json.dumps(payload, ensure_ascii=False)}")
+
+
+def _invoke_structured_runnable(
+    *,
+    schema_name: str,
+    runnable: Any,
+    model: Any,
+    messages: Sequence[BaseMessage],
+    is_fallback: bool,
+) -> Any:
+    start_time = time.perf_counter()
+    response: Any = None
+    error: Exception | None = None
+    validation_success = False
+    try:
+        response = runnable.invoke(
+            list(messages),
+            **_build_structured_invoke_kwargs(schema_name, model),
+        )
+        validation_success = True
+        return response
+    except Exception as exc:
+        error = exc
+        raise
+    finally:
+        _log_structured_call(
+            schema_name=schema_name,
+            model=model,
+            duration_ms=(time.perf_counter() - start_time) * 1000,
+            messages=messages,
+            response=response,
+            validation_success=validation_success,
+            is_fallback=is_fallback,
+            error=error,
+        )
+
+
+def _invoke_structured_with_fallback(
+    *,
+    schema_name: str,
+    primary_runnable: Any,
+    primary_model: Any,
+    messages: Sequence[BaseMessage],
+    fallback_runnable: Any | None = None,
+    fallback_model: Any | None = None,
+) -> Any:
+    try:
+        return _invoke_structured_runnable(
+            schema_name=schema_name,
+            runnable=primary_runnable,
+            model=primary_model,
+            messages=messages,
+            is_fallback=False,
+        )
+    except Exception:
+        if not is_structured_fallback_enabled() or fallback_runnable is None or fallback_model is None:
+            raise
+        return _invoke_structured_runnable(
+            schema_name=schema_name,
+            runnable=fallback_runnable,
+            model=fallback_model,
+            messages=messages,
+            is_fallback=True,
+        )
 
 
 def _latest_user_message_text(state: TeachingAssistantState) -> str:
@@ -359,6 +568,59 @@ def _result_key_for_artifact_type(artifact_type: str) -> str | None:
     }.get(artifact_type)
 
 
+def _latest_human_messages(
+    state: TeachingAssistantState,
+    *,
+    limit: int,
+) -> list[HumanMessage]:
+    human_messages = [
+        message
+        for message in state.get("messages", [])
+        if isinstance(message, HumanMessage)
+    ]
+    if limit <= 0:
+        return []
+    return human_messages[-limit:]
+
+
+def build_metadata_extraction_messages(state: TeachingAssistantState) -> list[BaseMessage]:
+    current_metadata = state.get("teaching_metadata") or {}
+    recent_human_messages = _latest_human_messages(
+        state,
+        limit=2 if current_metadata else 1,
+    )
+    latest_message = _message_to_text(recent_human_messages[-1]).strip() if recent_human_messages else ""
+    previous_message = (
+        _message_to_text(recent_human_messages[-2]).strip()
+        if len(recent_human_messages) > 1
+        else ""
+    )
+    payload_lines = [
+        f"Current metadata JSON:\n{_to_prompt_json(current_metadata)}",
+        f"Latest user's message:\n{latest_message or '<empty>'}",
+        f"Latest ai assistant's message:\n{[msg for msg in state["messages"] if isinstance(msg, AIMessage)][-2:] or '<empty>'}",
+    ]
+    if previous_message:
+        payload_lines.append(f"Recent clarification message:\n{previous_message}")
+    return [
+        SystemMessage(content=METADATA_EXTRACTION_SYSTEM_PROMPT),
+        HumanMessage(content="\n\n".join(payload_lines)),
+    ]
+
+
+def _build_intent_router_messages(state: TeachingAssistantState) -> list[BaseMessage]:
+    recent_messages = [
+        message
+        for message in state["messages"]
+        if isinstance(message, (HumanMessage, AIMessage))
+    ][-4:]
+    return [
+        SystemMessage(content=INTENT_ROUTER_SYSTEM_PROMPT),
+        HumanMessage(content=f"Current thread artifacts:\n{_artifact_catalog_summary(state)}"),
+        *recent_messages,
+    ]
+
+
 def metadata_review_interrupt_node(
     state: TeachingAssistantState,
     config: Optional[RunnableConfig] = None,
@@ -375,8 +637,8 @@ def metadata_review_interrupt_node(
         if reporter:
                 reporter.emit("metadata_review", "success", detail="已确认教学要素")
         return Command(goto="rag_retrieval_node")
-    if reporter:
-                reporter.emit("metadata_review", "failed", detail="教学要素待修改")
+    # if reporter:
+    #             reporter.emit("metadata_review", "success", detail="已修改教学要素")
     return Command(
         update=_build_resume_message_update(user_input),
         goto="metadata_structer_node",
@@ -396,21 +658,13 @@ def intent_router_node(
                 reporter.emit("intent_recognition", "success", detail="识别为产物修改请求")
             return {"intent": "artifact_revision"}
 
-        decision = router.invoke(
-            [
-                SystemMessage(
-                    content=(
-                        "You are an intent router for a teacher-facing workflow. "
-                        "Output in json format and no any other character. "
-                        "Return `artifact_revision` when the user is asking to edit, revise, update, or adjust an already-generated artifact in the same thread. "
-                        "Return `teaching_plan` for lesson preparation, teaching design, courseware, lesson-plan, or interactive activity generation requests. "
-                        "Return `normal_chat` for everything else. "
-                        "Use the available artifact context below when deciding whether the user is referring to an existing artifact.\n\n"
-                        f"Current thread artifacts:\n{_artifact_catalog_summary(state)}"
-                    )
-                ),
-                *[msg for msg in state["messages"] if isinstance(msg, (HumanMessage, AIMessage))][-4:],
-            ]
+        decision = _invoke_structured_with_fallback(
+            schema_name="ConversationRoute",
+            primary_runnable=router,
+            primary_model=structured_fast_llm,
+            messages=_build_intent_router_messages(state),
+            fallback_runnable=router_fallback,
+            fallback_model=structured_output_llm,
         )
         detail_by_intent = {
             "normal_chat": "识别为普通对话",
@@ -437,7 +691,13 @@ def route_decision(state: TeachingAssistantState):
 
 
 async def normal_chat_node(state: TeachingAssistantState):
-    response = await llm.ainvoke(state["messages"])
+    system_prompt="""
+    你是一个面向老师备课与教学设计的智能助手，可以回答日常问题，或者帮助老师进行备课与教学设计。
+    当用户问你有什么能力的时候，参考这样的回答：
+    “我可以帮助你查资料、整理知识点、设计教学目标、撰写教案、制作PPT、设计生成课堂互动内容等。
+    你可以上传本地知识库，或者上传附件供我分析，支持pdf，docx，视频的分析。也支持语音输入。”
+    """
+    response = await llm.ainvoke([SystemMessage(content=system_prompt)] + state["messages"])
     return {"messages": [response]}
 
 
@@ -446,22 +706,15 @@ def metadata_structer_node(
     config: Optional[RunnableConfig] = None,
 ):
     reporter = emit_progress(config, "metadata_structuring", "running")
-    current_metadata = state.get("teaching_metadata")
-    system_prompt = (
-        "You extract structured teaching metadata for a teacher assistant. "
-        "Output in json format and no any other character. "
-        "Use only the user's provided information. Fill missing fields with None. "
-        "Set `is_complete` to true only when the metadata is complete enough for retrieval and instructional design.\n"
-        f"Current metadata: {current_metadata}"
-    )
-    start_time = time.perf_counter()
     try:
-        response = metadata_extractor.invoke(
-            [SystemMessage(content=system_prompt)]
-            + [msg for msg in state["messages"] if isinstance(msg, HumanMessage)]
+        response = _invoke_structured_with_fallback(
+            schema_name="TeachingMetadata",
+            primary_runnable=metadata_extractor,
+            primary_model=structured_fast_llm,
+            messages=build_metadata_extraction_messages(state),
+            fallback_runnable=metadata_extractor_fallback,
+            fallback_model=structured_output_llm,
         )
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        print(f"[metadata_structer_node] duration_ms={duration_ms:.2f} metadata={response}")
         if reporter:
             reporter.emit(
                 "metadata_structuring",
@@ -477,6 +730,66 @@ def metadata_structer_node(
         if reporter:
             reporter.emit("metadata_structuring", "failed", detail=str(exc))
         raise
+
+
+async def warmup_structured_output_schemas() -> None:
+    if not is_structured_warmup_enabled():
+        return
+
+    async def _warmup_schema(
+        *,
+        schema_name: str,
+        primary_runnable: Any,
+        primary_model: Any,
+        fallback_runnable: Any | None,
+        fallback_model: Any | None,
+        messages: Sequence[BaseMessage],
+    ) -> None:
+        try:
+            await asyncio.to_thread(
+                _invoke_structured_with_fallback,
+                schema_name=schema_name,
+                primary_runnable=primary_runnable,
+                primary_model=primary_model,
+                messages=messages,
+                fallback_runnable=fallback_runnable,
+                fallback_model=fallback_model,
+            )
+            print(f"[structured_output_warmup] schema={schema_name} success=true")
+        except Exception as exc:
+            print(f"[structured_output_warmup] schema={schema_name} success=false error={exc}")
+
+    await asyncio.gather(
+        _warmup_schema(
+            schema_name="ConversationRoute",
+            primary_runnable=router,
+            primary_model=structured_fast_llm,
+            fallback_runnable=router_fallback,
+            fallback_model=structured_output_llm,
+            messages=[
+                SystemMessage(content=INTENT_ROUTER_SYSTEM_PROMPT),
+                HumanMessage(content="Current thread artifacts:\nNo ready artifacts exist in the current thread."),
+                HumanMessage(content="请帮我生成一份初中物理课程教案。"),
+            ],
+        ),
+        _warmup_schema(
+            schema_name="TeachingMetadata",
+            primary_runnable=metadata_extractor,
+            primary_model=structured_fast_llm,
+            fallback_runnable=metadata_extractor_fallback,
+            fallback_model=structured_output_llm,
+            messages=[
+                SystemMessage(content=METADATA_EXTRACTION_SYSTEM_PROMPT),
+                HumanMessage(
+                    content=(
+                        "Current metadata JSON:\n{}\n\n"
+                        "Latest user message:\n请帮我准备一节初中物理牛顿第一定律课程，时长40分钟。"
+                    )
+                ),
+            ],
+        ),
+        return_exceptions=True,
+    )
 
 
 def metadata_completion_condition(state: TeachingAssistantState):
@@ -716,40 +1029,6 @@ def _result_summary_line(result: Mapping[str, Any] | None) -> str | None:
         error = str(result.get("error") or "未知错误")
         return f"{label}处理失败：{error}"
     return None
-
-
-# async def _artifact_fan_in_node_legacy(state: TeachingAssistantState, config: RunnableConfig | None = None):
-#     reporter = emit_progress(config, "artifact_fan_in", "running")
-#     summary_lines = [
-#         line
-#         for line in (
-#             _result_summary_line(state.get("ppt_result")),
-#             _result_summary_line(state.get("lesson_plan_result")),
-#             _result_summary_line(state.get("game_result")),
-#         )
-#         if line
-#     ]
-#     if not summary_lines:
-#         return {}
-
-#     is_revision = bool(state.get("revision_source_artifacts"))
-#     header = "产物修改结果如下：" if is_revision else "产物生成结果如下："
-#     results = [
-#         result
-#         for result in (
-#             state.get("ppt_result"),
-#             state.get("lesson_plan_result"),
-#             state.get("game_result"),
-#         )
-#         if isinstance(result, Mapping) and result.get("status") in {"ready", "failed"}
-#     ]
-#     if reporter:
-#         reporter.emit("artifact_fan_in", "success", detail="已汇总产物处理结果")
-#     return {
-#         "revision_results": results,
-#         "messages": [AIMessage(content=header + "\n" + "\n".join(f"- {line}" for line in summary_lines))],
-#     }
-
 
 async def artifact_fan_in_node(state: TeachingAssistantState, config: RunnableConfig | None = None):
     reporter = emit_progress(config, "artifact_fan_in", "running")

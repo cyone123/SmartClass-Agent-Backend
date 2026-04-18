@@ -42,7 +42,7 @@ from app.core.graph import (
     build_input_messages,
     get_pending_approval_payload,
 )
-from app.core.llm import get_model, get_small_model
+from app.core.llm import get_model, get_small_model, get_suggestion_model
 from app.core.progress import (
     ProgressReporter,
     ProgressTracker,
@@ -607,7 +607,7 @@ class AgentRuntime:
         self.checkpointer = checkpointer
         self.rag_runtime = rag_runtime
         self.video_transcription_runtime = video_transcription_runtime
-        self.suggestion_generator = get_small_model(streaming=False)
+        self.suggestion_generator = get_suggestion_model(streaming=False)
         self._thread_locks: dict[str | None, asyncio.Lock] = {}
         self._thread_locks_guard = asyncio.Lock()
 
@@ -935,8 +935,8 @@ class AgentRuntime:
         prompt_messages = [
             SystemMessage(
                 content=(
-                    "我将提供一段 AI 与用户的对话。"
-                    "请你扮演用户，生成恰好 3 条最自然、最有价值的简短的中文回复。"
+                    "我将提供一段AI助手与用户的对话。"
+                    "请你扮演用户，生成恰好 3 条最自然、最有价值的简短的对AI助手上一条消息的中文回复。"
                     "请严格使用换行分隔每一条建议，每行只写一条。"
                     "每条都必须是用户可以直接发送给 AI 的完整句子。"
                     "要简洁、清晰、和刚刚的AI消息紧密相关。"

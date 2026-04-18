@@ -11,6 +11,7 @@ from app.api.plan import router as plan_router
 from app.api.session import router as session_router
 from app.core.agent import create_agent_runtime
 from app.core.file_ingestion import FileIngestionRuntime
+from app.core.graph import warmup_structured_output_schemas
 from app.core.rag import create_rag_runtime
 from app.core.speech import create_speech_runtime
 from app.core.skills import create_skill_registry
@@ -50,6 +51,7 @@ async def lifespan(app: FastAPI):
             video_transcription_runtime=video_transcription_runtime,
         )
         app.state.agent_runtime = agent_runtime
+        await warmup_structured_output_schemas()
         yield
     finally:
         if agent_runtime is not None:
