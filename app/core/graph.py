@@ -11,6 +11,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.runtime import Runtime
+from langgraph.store.base import BaseStore
 from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field
 
@@ -22,6 +24,17 @@ from app.core.llm import (
     llm,
     structured_fast_llm,
     structured_output_llm,
+)
+from app.core.memory import (
+    MemoryRuntimeContext,
+    build_memory_system_message,
+    choose_relevant_experience_memories,
+    format_profile_memory_context,
+    profile_namespace,
+    reflect_experience_memory,
+    reflect_profile_memory,
+    search_memory_items,
+    with_memory_context_messages,
 )
 from app.core.progress import emit_progress
 from app.core.rag import RagRuntime
@@ -641,7 +654,7 @@ def metadata_review_interrupt_node(
     #             reporter.emit("metadata_review", "success", detail="已修改教学要素")
     return Command(
         update=_build_resume_message_update(user_input),
-        goto="metadata_structer_node",
+        goto="teaching_plan_memory_retrieval_node",
     )
 
 
@@ -682,12 +695,134 @@ def intent_router_node(
 
 def route_decision(state: TeachingAssistantState):
     if state.get("intent") == "normal_chat":
-        return "normal_chat_node"
+        return "normal_chat_memory_retrieval_node"
     if state.get("intent") == "teaching_plan":
-        return "metadata_structer_node"
+        return "teaching_plan_memory_retrieval_node"
     if state.get("intent") == "artifact_revision":
-        return "artifact_revision_router_node"
-    return "normal_chat_node"
+        return "artifact_revision_memory_retrieval_node"
+    return "normal_chat_memory_retrieval_node"
+
+
+def _runtime_user_id(runtime: Runtime[MemoryRuntimeContext] | None) -> str | None:
+    if runtime is None or not isinstance(runtime.context, dict):
+        return None
+    return runtime.context.get("user_id")
+
+
+def _runtime_store(runtime: Runtime[MemoryRuntimeContext] | None) -> BaseStore | None:
+    if runtime is None:
+        return None
+    return runtime.store
+
+
+async def profile_memory_load_node(
+    state: TeachingAssistantState,
+    runtime: Runtime[MemoryRuntimeContext],
+):
+    store = _runtime_store(runtime)
+    if store is None:
+        return {}
+    user_id = _runtime_user_id(runtime)
+    memories = await search_memory_items(
+        store,
+        profile_namespace(user_id),
+        limit=100,
+    )
+    return {"profile_memory_context": format_profile_memory_context(memories)}
+
+
+async def _experience_memory_retrieval_update(
+    state: TeachingAssistantState,
+    runtime: Runtime[MemoryRuntimeContext],
+    *,
+    goto: str,
+):
+    context, memories = await choose_relevant_experience_memories(
+        store=_runtime_store(runtime),
+        user_id=_runtime_user_id(runtime),
+        state=state,
+    )
+    return Command(
+        update={
+            "experience_memory_context": context,
+            "loaded_experience_memories": memories,
+        },
+        goto=goto,
+    )
+
+
+async def normal_chat_memory_retrieval_node(
+    state: TeachingAssistantState,
+    runtime: Runtime[MemoryRuntimeContext],
+):
+    return await _experience_memory_retrieval_update(
+        state,
+        runtime,
+        goto="normal_chat_node",
+    )
+
+
+async def teaching_plan_memory_retrieval_node(
+    state: TeachingAssistantState,
+    runtime: Runtime[MemoryRuntimeContext],
+):
+    return await _experience_memory_retrieval_update(
+        state,
+        runtime,
+        goto="metadata_structer_node",
+    )
+
+
+async def teaching_design_memory_retrieval_node(
+    state: TeachingAssistantState,
+    runtime: Runtime[MemoryRuntimeContext],
+):
+    return await _experience_memory_retrieval_update(
+        state,
+        runtime,
+        goto="teaching_design_planner",
+    )
+
+
+async def artifact_revision_memory_retrieval_node(
+    state: TeachingAssistantState,
+    runtime: Runtime[MemoryRuntimeContext],
+):
+    return await _experience_memory_retrieval_update(
+        state,
+        runtime,
+        goto="artifact_revision_router_node",
+    )
+
+
+async def profile_memory_reflection_node(
+    state: TeachingAssistantState,
+    runtime: Runtime[MemoryRuntimeContext],
+):
+    await reflect_profile_memory(
+        store=_runtime_store(runtime),
+        user_id=_runtime_user_id(runtime),
+        state=state,
+    )
+    goto = state.get("memory_reflection_goto") or "experience_memory_reflection_node"
+    return Command(update={"memory_reflection_goto": None}, goto=goto)
+
+
+async def experience_memory_reflection_node(
+    state: TeachingAssistantState,
+    config: Optional[RunnableConfig] = None,
+    runtime: Runtime[MemoryRuntimeContext] | None = None,
+):
+    configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
+    thread_id = str(configurable.get("thread_id") or "").strip() or None
+    await reflect_experience_memory(
+        store=_runtime_store(runtime),
+        user_id=_runtime_user_id(runtime),
+        state=state,
+        thread_id=thread_id,
+        plan_id=state.get("plan_id"),
+    )
+    return {}
 
 
 async def normal_chat_node(state: TeachingAssistantState):
@@ -697,8 +832,13 @@ async def normal_chat_node(state: TeachingAssistantState):
     “我可以帮助你查资料、整理知识点、设计教学目标、撰写教案、制作PPT、设计生成课堂互动内容等。
     你可以上传本地知识库，或者上传附件供我分析，支持pdf，docx，视频的分析。也支持语音输入。”
     """
-    response = await llm.ainvoke([SystemMessage(content=system_prompt)] + state["messages"])
-    return {"messages": [response]}
+    response = await llm.ainvoke(
+        [SystemMessage(content=system_prompt)] + with_memory_context_messages(state)
+    )
+    return {
+        "messages": [response],
+        "memory_reflection_goto": "experience_memory_reflection_node",
+    }
 
 
 def metadata_structer_node(
@@ -806,7 +946,10 @@ async def follow_up_questioner(state: TeachingAssistantState):
         f"\n当前教学要素：{state.get('teaching_metadata')}"
     )
     response = await llm.ainvoke([SystemMessage(content=system_prompt)])
-    return {"messages": [response]}
+    return {
+        "messages": [response],
+        "memory_reflection_goto": INTERRUPT_FOR_USERINPUT_NODE,
+    }
 
 
 def interrupt_for_userinput(state: TeachingAssistantState):
@@ -849,12 +992,15 @@ async def teaching_design_planner(
         f"RAG 上下文：{state.get('rag_context', '')}"
     )
     try:
-        response = await llm.ainvoke([SystemMessage(content=system_prompt)] + state["messages"])
+        response = await llm.ainvoke(
+            [SystemMessage(content=system_prompt)] + with_memory_context_messages(state)
+        )
         if reporter:
             reporter.emit("teaching_design", "success", detail="已生成教学设计方案")
         return {
             "teaching_design_plan": _message_to_text(response).strip(),
             "messages": [response],
+            "memory_reflection_goto": TEACHING_PLAN_REVIEW_INTERRUPT_NODE,
         }
     except Exception as exc:
         if reporter:
@@ -892,7 +1038,7 @@ def teaching_plan_review_interrupt_node(
         )
     return Command(
         update=_build_resume_message_update(user_input),
-        goto="teaching_design_planner",
+        goto="teaching_design_memory_retrieval_node",
     )
 
 
@@ -1012,7 +1158,7 @@ def artifact_revision_clarification_interrupt_node(
         )
     return Command(
         update=_build_resume_message_update(user_input),
-        goto="artifact_revision_router_node",
+        goto="artifact_revision_memory_retrieval_node",
     )
 
 
@@ -1030,7 +1176,7 @@ def _result_summary_line(result: Mapping[str, Any] | None) -> str | None:
         return f"{label}处理失败：{error}"
     return None
 
-async def artifact_fan_in_node(state: TeachingAssistantState, config: RunnableConfig | None = None):
+async def artifact_fan_in_node(state: TeachingAssistantState, config: Optional[RunnableConfig] = None):
     reporter = emit_progress(config, "artifact_fan_in", "running")
     is_revision = bool(state.get("revision_source_artifacts"))
     if is_revision:
@@ -1078,6 +1224,7 @@ def _clean_goto_nodes(nodes: Sequence[str | None]) -> list[str]:
 def build_agent_graph(
     *,
     checkpointer: AsyncPostgresSaver,
+    store: BaseStore | None = None,
     rag_runtime: RagRuntime,
     ppt_generate_node: Callable[[TeachingAssistantState, RunnableConfig | None], Awaitable[dict]],
     docx_generate_node: Callable[[TeachingAssistantState, RunnableConfig | None], Awaitable[dict]],
@@ -1114,9 +1261,19 @@ def build_agent_graph(
                 reporter.emit("rag_retrieval", "failed", detail=str(exc))
             raise
 
-    agent_builder = StateGraph(TeachingAssistantState)
+    agent_builder = StateGraph(
+        TeachingAssistantState,
+        context_schema=MemoryRuntimeContext,
+    )
+    agent_builder.add_node("profile_memory_load_node", profile_memory_load_node)
     agent_builder.add_node("intent_router_node", intent_router_node)
+    agent_builder.add_node("normal_chat_memory_retrieval_node", normal_chat_memory_retrieval_node)
+    agent_builder.add_node("teaching_plan_memory_retrieval_node", teaching_plan_memory_retrieval_node)
+    agent_builder.add_node("teaching_design_memory_retrieval_node", teaching_design_memory_retrieval_node)
+    agent_builder.add_node("artifact_revision_memory_retrieval_node", artifact_revision_memory_retrieval_node)
     agent_builder.add_node("normal_chat_node", normal_chat_node)
+    agent_builder.add_node("profile_memory_reflection_node", profile_memory_reflection_node)
+    agent_builder.add_node("experience_memory_reflection_node", experience_memory_reflection_node)
     agent_builder.add_node("metadata_structer_node", metadata_structer_node)
     agent_builder.add_node("follow_up_questioner", follow_up_questioner)
     agent_builder.add_node(INTERRUPT_FOR_USERINPUT_NODE, interrupt_for_userinput)
@@ -1134,17 +1291,19 @@ def build_agent_graph(
     agent_builder.add_node("html_game_revision_node", html_revision_node)
     agent_builder.add_node("artifact_fan_in_node", artifact_fan_in_node)
 
-    agent_builder.add_edge(START, "intent_router_node")
+    agent_builder.add_edge(START, "profile_memory_load_node")
+    agent_builder.add_edge("profile_memory_load_node", "intent_router_node")
     agent_builder.add_conditional_edges(
         "intent_router_node",
         route_decision,
         {
-            "normal_chat_node": "normal_chat_node",
-            "metadata_structer_node": "metadata_structer_node",
-            "artifact_revision_router_node": "artifact_revision_router_node",
+            "normal_chat_memory_retrieval_node": "normal_chat_memory_retrieval_node",
+            "teaching_plan_memory_retrieval_node": "teaching_plan_memory_retrieval_node",
+            "artifact_revision_memory_retrieval_node": "artifact_revision_memory_retrieval_node",
         },
     )
-    agent_builder.add_edge("normal_chat_node", END)
+    agent_builder.add_edge("normal_chat_node", "profile_memory_reflection_node")
+    agent_builder.add_edge("experience_memory_reflection_node", END)
     agent_builder.add_conditional_edges(
         "metadata_structer_node",
         metadata_completion_condition,
@@ -1153,16 +1312,16 @@ def build_agent_graph(
             "follow_up_questioner": "follow_up_questioner",
         },
     )
-    agent_builder.add_edge("follow_up_questioner", INTERRUPT_FOR_USERINPUT_NODE)
-    agent_builder.add_edge(INTERRUPT_FOR_USERINPUT_NODE, "metadata_structer_node")
+    agent_builder.add_edge("follow_up_questioner", "profile_memory_reflection_node")
+    agent_builder.add_edge(INTERRUPT_FOR_USERINPUT_NODE, "teaching_plan_memory_retrieval_node")
     agent_builder.add_edge("rag_retrieval_node", "teaching_design_planner")
-    agent_builder.add_edge("teaching_design_planner", TEACHING_PLAN_REVIEW_INTERRUPT_NODE)
+    agent_builder.add_edge("teaching_design_planner", "profile_memory_reflection_node")
     agent_builder.add_edge("ppt_generate_node", "artifact_fan_in_node")
     agent_builder.add_edge("docx_generate_node", "artifact_fan_in_node")
     agent_builder.add_edge("html_game_generate_node", "artifact_fan_in_node")
     agent_builder.add_edge("ppt_revision_node", "artifact_fan_in_node")
     agent_builder.add_edge("docx_revision_node", "artifact_fan_in_node")
     agent_builder.add_edge("html_game_revision_node", "artifact_fan_in_node")
-    agent_builder.add_edge("artifact_fan_in_node", END)
+    agent_builder.add_edge("artifact_fan_in_node", "profile_memory_reflection_node")
 
-    return agent_builder.compile(checkpointer=checkpointer)
+    return agent_builder.compile(checkpointer=checkpointer, store=store)

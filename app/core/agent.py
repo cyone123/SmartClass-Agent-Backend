@@ -33,6 +33,7 @@ from langchain_core.messages import (
 )
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.store.base import BaseStore
 from langgraph.types import Command
 
 from app.config import get_backend_root
@@ -54,7 +55,13 @@ from app.core.skills import SkillRegistry, SkillToolset, create_skill_registry
 from app.core.state import SubAgentResult, TeachingAssistantState
 from app.core.video_transcribe import VideoTranscriptionRuntime
 from app.core.workspace import WorkspaceToolset, get_workspace_paths
-from app.dependencies.db import AsyncSessionLocal, close_agent_checkpointer, init_agent_checkpointer
+from app.core.memory import DEFAULT_USER_ID
+from app.dependencies.db import (
+    AsyncSessionLocal,
+    close_agent_checkpointer,
+    init_agent_checkpointer,
+    init_memory_store,
+)
 from app.models.file import ArtifactFile, AttachmentFile
 from app.services import artifact_service, file_service
 
@@ -596,6 +603,7 @@ class AgentRuntime:
     def __init__(
         self,
         checkpointer: AsyncPostgresSaver,
+        memory_store: BaseStore,
         rag_runtime: RagRuntime,
         skill_registry: SkillRegistry,
         video_transcription_runtime: VideoTranscriptionRuntime,
@@ -605,6 +613,7 @@ class AgentRuntime:
         self.skill_toolset = SkillToolset(skill_registry)
         self.workspace_toolset = WorkspaceToolset()
         self.checkpointer = checkpointer
+        self.memory_store = memory_store
         self.rag_runtime = rag_runtime
         self.video_transcription_runtime = video_transcription_runtime
         self.suggestion_generator = get_suggestion_model(streaming=False)
@@ -672,6 +681,7 @@ class AgentRuntime:
 
         self.streaming_graph = build_agent_graph(
             checkpointer=checkpointer,
+            store=memory_store,
             rag_runtime=rag_runtime,
             ppt_generate_node=self.ppt_generate_node,
             docx_generate_node=self.docx_generate_node,
@@ -1047,6 +1057,14 @@ class AgentRuntime:
         teaching_design_plan = state.get("teaching_design_plan", "")
         teaching_metadata = state.get("teaching_metadata")
         rag_context = state.get("rag_context", "")
+        memory_context = "\n\n".join(
+            section
+            for section in (
+                state.get("profile_memory_context", ""),
+                state.get("experience_memory_context", ""),
+            )
+            if str(section or "").strip()
+        )
 
         artifact_instruction = {
             "ppt": (
@@ -1069,6 +1087,7 @@ class AgentRuntime:
             f"Teaching metadata:\n{teaching_metadata}\n\n"
             f"Teaching design plan:\n{teaching_design_plan}\n\n"
             f"Retrieved context:\n{rag_context}\n\n"
+            f"Long-term memory context:\n{memory_context or 'None'}\n\n"
             "If required dependencies are missing, explain the missing dependency clearly. "
             "Do not use shell to install anything."
         )
@@ -1642,6 +1661,7 @@ class AgentRuntime:
         thread_id: str | None,
         *,
         run_id: str,
+        user_id: str | None = None,
         plan_id: int | None = None,
         attachments: list[AttachmentFile] | None = None,
         approval: dict[str, Any] | None = None,
@@ -1713,6 +1733,7 @@ class AgentRuntime:
                             artifact_event_emitter=emit_artifact_event,
                             artifact_trace_event_emitter=emit_artifact_trace_event,
                         ),
+                        context={"user_id": user_id or DEFAULT_USER_ID},
                         stream_mode="messages",
                         subgraphs=True,
                         version="v2",
@@ -1814,10 +1835,12 @@ async def create_agent_runtime(
     video_transcription_runtime: VideoTranscriptionRuntime | None = None,
 ) -> AgentRuntime:
     checkpointer = await init_agent_checkpointer()
+    memory_store = await init_memory_store()
     if video_transcription_runtime is None:
         raise RuntimeError("Video transcription runtime is required.")
     return AgentRuntime(
         checkpointer=checkpointer,
+        memory_store=memory_store,
         rag_runtime=rag_runtime,
         skill_registry=skill_registry or create_skill_registry(),
         video_transcription_runtime=video_transcription_runtime,

@@ -92,6 +92,7 @@ async def chat(
             message.message or "",
             thread_id,
             run_id=run_id,
+            user_id=message.user_id,
             plan_id=plan_id,
             attachments=attachments,
             approval=approval,

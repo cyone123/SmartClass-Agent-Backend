@@ -134,7 +134,7 @@ def test_metadata_review_interrupt_node_routes_by_resume_payload(monkeypatch) ->
         lambda payload: {"message": "补充目标", "attachment_text": "summary"},
     )
     modify_result = metadata_review_interrupt_node(state)
-    assert modify_result.goto == "metadata_structer_node"
+    assert modify_result.goto == "teaching_plan_memory_retrieval_node"
     assert modify_result.update["messages"][-1].content == "补充目标"
 
 
@@ -171,7 +171,7 @@ def test_teaching_plan_review_interrupt_node_routes_by_resume_payload(monkeypatc
         lambda payload: {"message": "请缩短导入环节"},
     )
     modify_result = teaching_plan_review_interrupt_node(state)
-    assert modify_result.goto == "teaching_design_planner"
+    assert modify_result.goto == "teaching_design_memory_retrieval_node"
     assert modify_result.update["messages"][-1].content == "请缩短导入环节"
 
 

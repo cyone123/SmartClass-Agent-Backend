@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
 def _first_non_empty_env(*names: str) -> str | None:
@@ -72,6 +73,34 @@ def get_suggestion_model(*, streaming: bool = False) -> ChatOpenAI:
     )
 
 
+def get_memory_model(*, streaming: bool = False) -> ChatOpenAI:
+    return ChatOpenAI(
+        model=_first_non_empty_env(
+            "MEMORY_MODEL",
+            "STRUCTURED_FAST_MODEL",
+            "STRUCTED_MDOEL",
+            "SMALL_MDOEL",
+            "MODEL",
+        ),
+        api_key=_first_non_empty_env(
+            "MEMORY_API_KEY",
+            "STRUCTURED_FAST_API_KEY",
+            "SMALL_API_KEY",
+            "STRUCTED_API_KEY",
+            "API_KEY",
+        ),
+        base_url=_first_non_empty_env(
+            "MEMORY_BASE_URL",
+            "STRUCTURED_FAST_BASE_URL",
+            "SMALL_BASE_URL",
+            "STRUCTED_BASE_URL",
+            "BASE_URL",
+        ),
+        streaming=streaming,
+        timeout=_get_timeout_seconds(),
+    )
+
+
 def get_structured_fast_model(*, streaming: bool = False) -> ChatOpenAI:
     return ChatOpenAI(
         model=_first_non_empty_env("STRUCTURED_FAST_MODEL", "SMALL_MDOEL", "STRUCTED_MDOEL"),
@@ -105,3 +134,4 @@ def get_structured_prompt_cache_retention() -> str | None:
 llm = get_model(streaming=True)
 structured_fast_llm = get_structured_fast_model(streaming=False)
 structured_output_llm = get_structured_output_model(streaming=False)
+memory_llm = get_memory_model(streaming=False)

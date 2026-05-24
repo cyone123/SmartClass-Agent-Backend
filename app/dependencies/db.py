@@ -1,6 +1,7 @@
 import asyncio
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 from sqlalchemy import text
@@ -14,6 +15,9 @@ class PostgresProvider:
     _checkpoint_lock: asyncio.Lock | None = None
     _checkpoint_pool: AsyncConnectionPool | None = None
     _checkpoint_saver: AsyncPostgresSaver | None = None
+    _memory_lock: asyncio.Lock | None = None
+    _memory_pool: AsyncConnectionPool | None = None
+    _memory_store: AsyncPostgresStore | None = None
 
     @staticmethod
     def get_db_conn_string() -> str:
@@ -24,6 +28,12 @@ class PostgresProvider:
         if cls._checkpoint_lock is None:
             cls._checkpoint_lock = asyncio.Lock()
         return cls._checkpoint_lock
+
+    @classmethod
+    def get_memory_lock(cls) -> asyncio.Lock:
+        if cls._memory_lock is None:
+            cls._memory_lock = asyncio.Lock()
+        return cls._memory_lock
 
     @classmethod
     async def init_agent_checkpointer(cls) -> AsyncPostgresSaver:
@@ -61,6 +71,41 @@ class PostgresProvider:
         return cls._checkpoint_saver
 
     @classmethod
+    async def init_memory_store(cls) -> AsyncPostgresStore:
+        if cls._memory_store is not None:
+            return cls._memory_store
+
+        async with cls.get_memory_lock():
+            if cls._memory_store is None:
+                pool = AsyncConnectionPool(
+                    conninfo=cls.get_db_conn_string(),
+                    kwargs={
+                        "autocommit": True,
+                        "prepare_threshold": 0,
+                        "row_factory": dict_row,
+                    },
+                    min_size=2,
+                    max_size=10,
+                    open=False,
+                    name="langgraph-memory-store-pool",
+                )
+                await pool.open(wait=True)
+
+                store = AsyncPostgresStore(conn=pool)
+                await store.setup()
+
+                cls._memory_pool = pool
+                cls._memory_store = store
+
+        return cls._memory_store
+
+    @classmethod
+    def get_memory_store(cls) -> AsyncPostgresStore:
+        if cls._memory_store is None:
+            raise RuntimeError("Memory store is not initialized.")
+        return cls._memory_store
+
+    @classmethod
     async def close_agent_resources(cls) -> None:
         async with cls.get_checkpoint_lock():
             pool = cls._checkpoint_pool
@@ -70,6 +115,14 @@ class PostgresProvider:
         if pool is not None:
             await pool.close()
 
+        async with cls.get_memory_lock():
+            memory_pool = cls._memory_pool
+            cls._memory_pool = None
+            cls._memory_store = None
+
+        if memory_pool is not None:
+            await memory_pool.close()
+
 
 def get_agent_checkpointer() -> AsyncPostgresSaver:
     return PostgresProvider.get_agent_checkpointer()
@@ -77,6 +130,14 @@ def get_agent_checkpointer() -> AsyncPostgresSaver:
 
 async def init_agent_checkpointer() -> AsyncPostgresSaver:
     return await PostgresProvider.init_agent_checkpointer()
+
+
+def get_memory_store() -> AsyncPostgresStore:
+    return PostgresProvider.get_memory_store()
+
+
+async def init_memory_store() -> AsyncPostgresStore:
+    return await PostgresProvider.init_memory_store()
 
 
 def get_async_db_uri() -> str:
