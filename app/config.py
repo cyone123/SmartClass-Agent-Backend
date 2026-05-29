@@ -14,6 +14,20 @@ def get_env(name: str, default: str | None = None) -> str | None:
     return value
 
 
+def _get_bool_env(name: str, default: bool = False) -> bool:
+    value = get_env(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _get_int_env(name: str, default: int) -> int:
+    value = get_env(name)
+    if value is None or not value.strip():
+        return default
+    return int(value)
+
+
 def get_db_uri() -> str:
     database_url = get_env("DATABASE_URL") or get_env("POSTGRES_URL")
     if database_url:
@@ -134,3 +148,71 @@ def get_video_vision_base_url() -> str | None:
 
 def get_video_vision_api_key() -> str | None:
     return get_env("VIDEO_VISION_API_KEY") or get_env("API_KEY")
+
+
+def get_workspace_execution_backend() -> str:
+    return (get_env("WORKSPACE_EXECUTION_BACKEND", "local") or "local").strip().lower()
+
+
+def get_daytona_api_key() -> str | None:
+    return get_env("DAYTONA_API_KEY")
+
+
+def get_daytona_api_url() -> str | None:
+    return get_env("DAYTONA_API_URL")
+
+
+def get_daytona_target() -> str | None:
+    return get_env("DAYTONA_TARGET")
+
+
+def get_daytona_snapshot() -> str | None:
+    return get_env("DAYTONA_SNAPSHOT")
+
+
+def get_daytona_image() -> str | None:
+    return get_env("DAYTONA_IMAGE")
+
+
+def get_daytona_cleanup_policy() -> str:
+    return (get_env("DAYTONA_CLEANUP_POLICY", "delete") or "delete").strip().lower()
+
+
+def get_daytona_network_block_all() -> bool:
+    return _get_bool_env("DAYTONA_NETWORK_BLOCK_ALL", True)
+
+
+def get_daytona_network_allow_list() -> str | None:
+    configured = get_env("DAYTONA_NETWORK_ALLOW_LIST")
+    if configured is None:
+        return None
+    normalized = configured.strip()
+    return normalized or None
+
+
+def get_daytona_auto_stop_interval_minutes() -> int:
+    return _get_int_env("DAYTONA_AUTO_STOP_INTERVAL_MINUTES", 15)
+
+
+def get_daytona_auto_archive_interval_minutes() -> int:
+    return _get_int_env("DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES", 60 * 24)
+
+
+def get_daytona_auto_delete_interval_minutes() -> int:
+    return _get_int_env("DAYTONA_AUTO_DELETE_INTERVAL_MINUTES", 60 * 24 * 7)
+
+
+def get_daytona_create_timeout_seconds() -> int:
+    return _get_int_env("DAYTONA_CREATE_TIMEOUT_SECONDS", 60)
+
+
+def get_daytona_execution_timeout_seconds() -> int:
+    return _get_int_env("DAYTONA_EXECUTION_TIMEOUT_SECONDS", 120)
+
+
+def get_daytona_file_sync_timeout_seconds() -> int:
+    return _get_int_env("DAYTONA_FILE_SYNC_TIMEOUT_SECONDS", 30 * 60)
+
+
+def get_daytona_remote_root() -> str:
+    return (get_env("DAYTONA_REMOTE_ROOT", "/workspace/smartclass") or "/workspace/smartclass").strip()

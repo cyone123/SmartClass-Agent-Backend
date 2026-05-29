@@ -2,18 +2,40 @@ from __future__ import annotations
 
 import json
 import locale
+import logging
 import os
+import posixpath
 import re
 import shutil
+import shlex
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from langchain.tools import ToolRuntime, tool
 
-from app.config import get_file_storage_root
+from app.config import (
+    get_daytona_api_key,
+    get_daytona_api_url,
+    get_daytona_auto_archive_interval_minutes,
+    get_daytona_auto_delete_interval_minutes,
+    get_daytona_auto_stop_interval_minutes,
+    get_daytona_cleanup_policy,
+    get_daytona_create_timeout_seconds,
+    get_daytona_execution_timeout_seconds,
+    get_daytona_file_sync_timeout_seconds,
+    get_daytona_image,
+    get_daytona_network_allow_list,
+    get_daytona_network_block_all,
+    get_daytona_remote_root,
+    get_daytona_snapshot,
+    get_daytona_target,
+    get_file_storage_root,
+    get_workspace_execution_backend,
+)
 from app.core.progress import emit_progress
 
 DEFAULT_EXECUTION_TIMEOUT_SECONDS = 30
@@ -27,10 +49,17 @@ INSTALLER_COMMAND_PATTERN = re.compile(
     r"(install|add|i|dlx)\b"
 )
 SAFE_WORKSPACE_ID_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
+DAYTONA_SUPPORTED_CLEANUP_POLICIES = {"delete", "stop", "none"}
+
+logger = logging.getLogger(__name__)
 
 
 class WorkspaceValidationError(ValueError):
     """Raised when workspace access or execution is invalid."""
+
+
+class WorkspaceExecutionError(RuntimeError):
+    """Raised when the configured workspace execution backend fails."""
 
 
 @dataclass(frozen=True)
@@ -54,6 +83,78 @@ class WorkspaceExecutionResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class DaytonaExecutionSettings:
+    api_key: str
+    api_url: str
+    target: str
+    snapshot: str | None
+    image: str | None
+    cleanup_policy: Literal["delete", "stop", "none"]
+    network_block_all: bool
+    network_allow_list: str | None
+    auto_stop_interval_minutes: int
+    auto_archive_interval_minutes: int
+    auto_delete_interval_minutes: int
+    create_timeout_seconds: int
+    execution_timeout_seconds: int
+    file_sync_timeout_seconds: int
+    remote_root: str
+
+    @classmethod
+    def from_environment(cls) -> "DaytonaExecutionSettings":
+        api_key = (get_daytona_api_key() or "").strip()
+        api_url = (get_daytona_api_url() or "").strip()
+        target = (get_daytona_target() or "").strip()
+        snapshot = (get_daytona_snapshot() or "").strip() or None
+        image = (get_daytona_image() or "").strip() or None
+        cleanup_policy = get_daytona_cleanup_policy()
+        remote_root = get_daytona_remote_root().rstrip("/")
+
+        missing: list[str] = []
+        if not api_key:
+            missing.append("DAYTONA_API_KEY")
+        if not api_url:
+            missing.append("DAYTONA_API_URL")
+        if not target:
+            missing.append("DAYTONA_TARGET")
+        if missing:
+            raise WorkspaceValidationError(
+                "Daytona workspace execution is enabled but required settings are missing: "
+                + ", ".join(missing)
+            )
+        if bool(snapshot) == bool(image):
+            raise WorkspaceValidationError(
+                "Set exactly one of DAYTONA_SNAPSHOT or DAYTONA_IMAGE when Daytona workspace "
+                "execution is enabled."
+            )
+        if cleanup_policy not in DAYTONA_SUPPORTED_CLEANUP_POLICIES:
+            raise WorkspaceValidationError(
+                "DAYTONA_CLEANUP_POLICY must be one of: "
+                + ", ".join(sorted(DAYTONA_SUPPORTED_CLEANUP_POLICIES))
+            )
+        if not remote_root.startswith("/"):
+            raise WorkspaceValidationError("DAYTONA_REMOTE_ROOT must be an absolute sandbox path.")
+
+        return cls(
+            api_key=api_key,
+            api_url=api_url,
+            target=target,
+            snapshot=snapshot,
+            image=image,
+            cleanup_policy=cleanup_policy,  # type: ignore[arg-type]
+            network_block_all=get_daytona_network_block_all(),
+            network_allow_list=get_daytona_network_allow_list(),
+            auto_stop_interval_minutes=get_daytona_auto_stop_interval_minutes(),
+            auto_archive_interval_minutes=get_daytona_auto_archive_interval_minutes(),
+            auto_delete_interval_minutes=get_daytona_auto_delete_interval_minutes(),
+            create_timeout_seconds=get_daytona_create_timeout_seconds(),
+            execution_timeout_seconds=get_daytona_execution_timeout_seconds(),
+            file_sync_timeout_seconds=get_daytona_file_sync_timeout_seconds(),
+            remote_root=remote_root,
+        )
 
 
 def _sanitize_identifier(value: str | None, *, fallback: str) -> str:
@@ -108,6 +209,55 @@ def _decode_process_output(raw: bytes | str | None) -> str:
             continue
 
     return raw.decode("utf-8", errors="replace")
+
+
+def _get_configurable_value(config: Any, key: str) -> Any:
+    if not isinstance(config, dict):
+        return None
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    return configurable.get(key)
+
+
+def _remote_join(*parts: str) -> str:
+    cleaned = [part.strip("/") for part in parts if part]
+    if not cleaned:
+        return "/"
+    prefix = "/" if parts[0].startswith("/") else ""
+    return prefix + posixpath.join(*cleaned)
+
+
+def _quote_remote_path(path: str) -> str:
+    return shlex.quote(path)
+
+
+def _safe_log_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    if not text:
+        return None
+    return text
+
+
+def _daytona_error_category(exc: BaseException) -> str:
+    name = exc.__class__.__name__
+    if name == "DaytonaTimeoutError" or isinstance(exc, TimeoutError):
+        return "timeout"
+    if name in {"DaytonaAuthenticationError", "DaytonaAuthorizationError"}:
+        return "authorization"
+    if name == "DaytonaValidationError":
+        return "validation"
+    if name == "DaytonaConnectionError":
+        return "connection"
+    if name == "DaytonaRateLimitError":
+        return "rate_limit"
+    return "daytona_service"
+
+
+def _is_daytona_timeout(exc: BaseException) -> bool:
+    return _daytona_error_category(exc) == "timeout"
 
 
 def _snapshot_files(root: Path) -> dict[str, float]:
@@ -243,6 +393,7 @@ class ExecutionBackend:
         language: str,
         entrypoint: Path,
         paths: WorkspacePaths,
+        config: Any | None = None,
     ) -> WorkspaceExecutionResult:
         raise NotImplementedError
 
@@ -257,7 +408,9 @@ class LocalSubprocessExecutionBackend(ExecutionBackend):
         language: str,
         entrypoint: Path,
         paths: WorkspacePaths,
+        config: Any | None = None,
     ) -> WorkspaceExecutionResult:
+        _ = config
         command = _resolve_command(language)
         command.append(str(entrypoint))
 
@@ -334,9 +487,327 @@ class LocalSubprocessExecutionBackend(ExecutionBackend):
         )
 
 
+class DaytonaExecutionBackend(ExecutionBackend):
+    def __init__(
+        self,
+        *,
+        settings: DaytonaExecutionSettings | None = None,
+        daytona_factory: Any | None = None,
+    ) -> None:
+        self.settings = settings or DaytonaExecutionSettings.from_environment()
+        self._daytona_factory = daytona_factory
+        self._sdk_cache: dict[str, Any] | None = None
+
+    def _load_sdk(self) -> dict[str, Any]:
+        if self._sdk_cache is not None:
+            return self._sdk_cache
+        try:
+            from daytona import (  # type: ignore[import-not-found]
+                CreateSandboxFromImageParams,
+                CreateSandboxFromSnapshotParams,
+                Daytona,
+                DaytonaConfig,
+            )
+        except ImportError as exc:
+            raise WorkspaceValidationError(
+                "Daytona workspace execution is enabled but the 'daytona' Python package "
+                "is not installed."
+            ) from exc
+
+        self._sdk_cache = {
+            "CreateSandboxFromImageParams": CreateSandboxFromImageParams,
+            "CreateSandboxFromSnapshotParams": CreateSandboxFromSnapshotParams,
+            "Daytona": Daytona,
+            "DaytonaConfig": DaytonaConfig,
+        }
+        return self._sdk_cache
+
+    def _create_client(self) -> Any:
+        if self._daytona_factory is not None:
+            return self._daytona_factory(self.settings)
+
+        sdk = self._load_sdk()
+        config = sdk["DaytonaConfig"](
+            api_key=self.settings.api_key,
+            api_url=self.settings.api_url,
+            target=self.settings.target,
+        )
+        return sdk["Daytona"](config)
+
+    def _build_labels(self, config: Any | None) -> dict[str, str]:
+        labels = {
+            "app": "smartclass",
+            "purpose": "workspace-code",
+        }
+        for key in ("thread_id", "run_id", "plan_id", "agent_name"):
+            value = _safe_log_value(_get_configurable_value(config, key))
+            if value:
+                labels[key] = _sanitize_identifier(value, fallback=key)
+        return labels
+
+    def _create_sandbox(self, client: Any, *, language: str, labels: dict[str, str]) -> Any:
+        sdk = self._load_sdk() if self._daytona_factory is None else None
+        sandbox_language = "javascript" if language == "node" else "python"
+        env_vars = {
+            "SMARTCLASS_BACKEND": "daytona",
+            "SMARTCLASS_RUN_ID": labels.get("run_id", ""),
+            "SMARTCLASS_THREAD_ID": labels.get("thread_id", ""),
+        }
+        network_kwargs: dict[str, Any] = {
+            "network_block_all": self.settings.network_block_all,
+        }
+        if not self.settings.network_block_all and self.settings.network_allow_list:
+            network_kwargs["network_allow_list"] = self.settings.network_allow_list
+
+        common_kwargs = {
+            "name": f"smartclass-{labels.get('run_id', 'adhoc-run')}",
+            "language": sandbox_language,
+            "labels": labels,
+            "env_vars": env_vars,
+            "auto_stop_interval": self.settings.auto_stop_interval_minutes,
+            "auto_archive_interval": self.settings.auto_archive_interval_minutes,
+            "auto_delete_interval": self.settings.auto_delete_interval_minutes,
+            **network_kwargs,
+        }
+        if self._daytona_factory is not None:
+            params = {
+                **common_kwargs,
+                "snapshot": self.settings.snapshot,
+                "image": self.settings.image,
+            }
+        elif self.settings.snapshot:
+            params_type = sdk["CreateSandboxFromSnapshotParams"] if sdk else None
+            params = params_type(snapshot=self.settings.snapshot, **common_kwargs)
+        else:
+            params_type = sdk["CreateSandboxFromImageParams"] if sdk else None
+            params = params_type(image=self.settings.image, **common_kwargs)
+        return client.create(params, timeout=self.settings.create_timeout_seconds)
+
+    def _remote_paths(self) -> tuple[str, str, str]:
+        remote_root = self.settings.remote_root.rstrip("/")
+        return (
+            _remote_join(remote_root, "workspace"),
+            _remote_join(remote_root, "run"),
+            _remote_join(remote_root, "run", "outputs"),
+        )
+
+    def _ensure_remote_dirs(self, sandbox: Any, directories: set[str]) -> None:
+        if not directories:
+            return
+        command = "mkdir -p " + " ".join(_quote_remote_path(path) for path in sorted(directories))
+        response = sandbox.process.exec(command, timeout=30)
+        if getattr(response, "exit_code", 1) != 0:
+            raise WorkspaceExecutionError("Failed to prepare Daytona sandbox directories.")
+
+    def _upload_workspace(self, sandbox: Any, *, paths: WorkspacePaths, remote_workspace: str) -> None:
+        directories = {remote_workspace}
+        files: list[tuple[Path, str]] = []
+        if paths.workspace_root.exists():
+            for local_path in sorted(paths.workspace_root.rglob("*")):
+                if not local_path.is_file():
+                    continue
+                relative_path = local_path.relative_to(paths.workspace_root).as_posix()
+                remote_path = _remote_join(remote_workspace, relative_path)
+                directories.add(posixpath.dirname(remote_path))
+                files.append((local_path, remote_path))
+
+        self._ensure_remote_dirs(sandbox, directories)
+        for local_path, remote_path in files:
+            try:
+                sandbox.fs.upload_file(
+                    str(local_path),
+                    remote_path,
+                    timeout=self.settings.file_sync_timeout_seconds,
+                )
+            except TypeError:
+                sandbox.fs.upload_file(
+                    local_path.read_bytes(),
+                    remote_path,
+                    timeout=self.settings.file_sync_timeout_seconds,
+                )
+
+    def _collect_outputs(
+        self,
+        sandbox: Any,
+        *,
+        paths: WorkspacePaths,
+        remote_output: str,
+    ) -> list[str]:
+        self._ensure_remote_dirs(sandbox, {remote_output})
+        response = sandbox.process.exec(
+            f"find {_quote_remote_path(remote_output)} -type f",
+            timeout=30,
+        )
+        if getattr(response, "exit_code", 1) != 0:
+            raise WorkspaceExecutionError("Failed to list Daytona sandbox output files.")
+
+        stdout = getattr(getattr(response, "artifacts", None), "stdout", None)
+        output = stdout if stdout is not None else getattr(response, "result", "")
+        remote_files = [line.strip() for line in str(output).splitlines() if line.strip()]
+        collected: list[str] = []
+        for remote_path in remote_files:
+            if not remote_path.startswith(remote_output.rstrip("/") + "/"):
+                continue
+            relative_remote = remote_path[len(remote_output.rstrip("/") + "/") :]
+            local_path = paths.output_root / Path(*PurePosixPath(relative_remote).parts)
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            downloaded = sandbox.fs.download_file(remote_path)
+            if isinstance(downloaded, str):
+                local_path.write_text(downloaded, encoding="utf-8")
+            else:
+                local_path.write_bytes(bytes(downloaded or b""))
+            collected.append(local_path.relative_to(paths.thread_root).as_posix())
+        return sorted(collected)
+
+    def _cleanup(self, client: Any, sandbox: Any) -> None:
+        _ = client
+        if self.settings.cleanup_policy == "delete":
+            sandbox.delete(timeout=self.settings.create_timeout_seconds)
+        elif self.settings.cleanup_policy == "stop":
+            sandbox.stop(timeout=self.settings.create_timeout_seconds)
+
+    def execute(
+        self,
+        *,
+        language: str,
+        entrypoint: Path,
+        paths: WorkspacePaths,
+        config: Any | None = None,
+    ) -> WorkspaceExecutionResult:
+        started_at = time.monotonic()
+        client = self._create_client()
+        labels = self._build_labels(config)
+        sandbox: Any | None = None
+        remote_workspace, remote_run, remote_output = self._remote_paths()
+        entrypoint_relative = entrypoint.relative_to(paths.workspace_root).as_posix()
+        remote_entrypoint = _remote_join(remote_workspace, entrypoint_relative)
+        command_name = "node" if language == "node" else "python"
+        sandbox_name: str | None = None
+        status = "failed"
+        error_category: str | None = None
+
+        try:
+            sandbox = self._create_sandbox(client, language=language, labels=labels)
+            sandbox_name = _safe_log_value(getattr(sandbox, "id", None)) or _safe_log_value(
+                getattr(sandbox, "name", None)
+            )
+            self._ensure_remote_dirs(sandbox, {remote_workspace, remote_run, remote_output})
+            self._upload_workspace(sandbox, paths=paths, remote_workspace=remote_workspace)
+
+            env = {
+                "AGENT_WORKSPACE_ROOT": remote_workspace,
+                "AGENT_RUN_ROOT": remote_run,
+                "AGENT_OUTPUT_DIR": remote_output,
+                "PYTHONIOENCODING": "utf-8",
+            }
+            response = sandbox.process.exec(
+                f"{command_name} {_quote_remote_path(remote_entrypoint)}",
+                cwd=remote_workspace,
+                env=env,
+                timeout=self.settings.execution_timeout_seconds,
+            )
+            raw_stdout = getattr(getattr(response, "artifacts", None), "stdout", None)
+            stdout, _ = _truncate_text(
+                str(raw_stdout if raw_stdout is not None else getattr(response, "result", "")),
+                max_chars=MAX_EXECUTION_OUTPUT_CHARS,
+                max_lines=MAX_EXECUTION_OUTPUT_LINES,
+            )
+            raw_stderr = getattr(getattr(response, "artifacts", None), "stderr", None)
+            stderr, _ = _truncate_text(
+                str(raw_stderr if raw_stderr is not None else getattr(response, "stderr", "")),
+                max_chars=MAX_EXECUTION_OUTPUT_CHARS,
+                max_lines=MAX_EXECUTION_OUTPUT_LINES,
+            )
+            output_files = self._collect_outputs(
+                sandbox,
+                paths=paths,
+                remote_output=remote_output,
+            )
+            exit_code = int(getattr(response, "exit_code", 1))
+            timed_out = False
+            status = "success" if exit_code == 0 else "nonzero_exit"
+            return WorkspaceExecutionResult(
+                language=language,
+                entrypoint=entrypoint_relative,
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+                timed_out=timed_out,
+                output_files=output_files,
+                workspace_root=str(paths.workspace_root),
+            )
+        except Exception as exc:
+            error_category = _daytona_error_category(exc)
+            if _is_daytona_timeout(exc) and sandbox is not None:
+                status = "timeout"
+                return WorkspaceExecutionResult(
+                    language=language,
+                    entrypoint=entrypoint_relative,
+                    exit_code=-1,
+                    stdout="",
+                    stderr="Daytona sandbox execution timed out.",
+                    timed_out=True,
+                    output_files=[],
+                    workspace_root=str(paths.workspace_root),
+                )
+            message = (
+                "Daytona sandbox workspace execution failed "
+                f"({error_category}). Check backend logs for run diagnostics."
+            )
+            raise WorkspaceExecutionError(message) from exc
+        finally:
+            cleanup_error: BaseException | None = None
+            if sandbox is not None:
+                try:
+                    self._cleanup(client, sandbox)
+                except Exception as exc:
+                    cleanup_error = exc
+                    logger.warning(
+                        "daytona_workspace_cleanup_failed",
+                        extra={
+                            "backend_type": "daytona",
+                            "sandbox": sandbox_name,
+                            "run_id": labels.get("run_id"),
+                            "thread_id": labels.get("thread_id"),
+                            "plan_id": labels.get("plan_id"),
+                            "agent_name": labels.get("agent_name"),
+                            "error_category": _daytona_error_category(exc),
+                        },
+                    )
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            logger.info(
+                "workspace_code_execution",
+                extra={
+                    "backend_type": "daytona",
+                    "sandbox": sandbox_name,
+                    "run_id": labels.get("run_id"),
+                    "thread_id": labels.get("thread_id"),
+                    "plan_id": labels.get("plan_id"),
+                    "agent_name": labels.get("agent_name"),
+                    "language": language,
+                    "entrypoint": entrypoint_relative,
+                    "duration_ms": duration_ms,
+                    "status": status,
+                    "error_category": error_category,
+                    "cleanup_error": cleanup_error is not None,
+                },
+            )
+
+
+def create_workspace_execution_backend() -> ExecutionBackend:
+    backend = get_workspace_execution_backend()
+    if backend == "local":
+        return LocalSubprocessExecutionBackend()
+    if backend == "daytona":
+        return DaytonaExecutionBackend()
+    raise WorkspaceValidationError(
+        "WORKSPACE_EXECUTION_BACKEND must be one of: local, daytona."
+    )
+
+
 class WorkspaceManager:
     def __init__(self, backend: ExecutionBackend | None = None) -> None:
-        self.backend = backend or LocalSubprocessExecutionBackend()
+        self.backend = backend or create_workspace_execution_backend()
 
     def list_files(self, config: Any, *, relative_path: str = ".") -> dict[str, Any]:
         paths = get_workspace_paths(config)
@@ -458,6 +929,12 @@ class WorkspaceManager:
         language: Literal["python", "node"],
         entrypoint: str,
     ) -> WorkspaceExecutionResult:
+        if language not in SUPPORTED_WORKSPACE_LANGUAGES:
+            raise WorkspaceValidationError(
+                f"Unsupported workspace language '{language}'. "
+                f"Supported languages: {', '.join(sorted(SUPPORTED_WORKSPACE_LANGUAGES))}"
+            )
+
         paths = get_workspace_paths(config)
         resolved = _resolve_workspace_path(paths.workspace_root, entrypoint)
         if not resolved.is_file():
@@ -474,6 +951,7 @@ class WorkspaceManager:
             language=language,
             entrypoint=resolved,
             paths=paths,
+            config=config,
         )
 
 
