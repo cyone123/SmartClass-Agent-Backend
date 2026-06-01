@@ -24,6 +24,8 @@ class KnowledgeFile(BaseModel):
     size_bytes: int
     sha256: str
     storage_path: str
+    storage_backend: str | None = None
+    storage_key: str | None = None
     status: KnowledgeFileStatus
     error_message: str | None
     chunk_count: int
@@ -53,6 +55,8 @@ class AttachmentFile(BaseModel):
     size_bytes: int
     sha256: str
     storage_path: str
+    storage_backend: str | None = None
+    storage_key: str | None = None
     created_at: datetime
     updated_at: datetime
 

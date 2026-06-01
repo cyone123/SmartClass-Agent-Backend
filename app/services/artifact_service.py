@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import contextlib
 import mimetypes
 import re
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Iterator, Literal
 
 from fastapi import HTTPException, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_file_storage_root
+from app.core.storage import build_storage_key, get_storage_service
 from app.models.file import ArtifactFile
 from app.services.file_service import ensure_plan_exists, ensure_thread_belongs_to_plan
 
@@ -82,6 +83,22 @@ def _build_storage_path(
     return stored_name, storage_path
 
 
+def _build_storage_key(
+    *,
+    thread_id: str,
+    artifact_type: ArtifactType,
+    run_id: str,
+    stored_name: str,
+) -> str:
+    return build_storage_key(
+        "artifacts",
+        f"thread-{thread_id}",
+        artifact_type,
+        f"run-{run_id}",
+        stored_name,
+    )
+
+
 def serialize_artifact(
     artifact: ArtifactFile,
     *,
@@ -98,6 +115,9 @@ def serialize_artifact(
         "thread_id": artifact.thread_id,
         "extension": artifact.extension,
         "size_bytes": artifact.size_bytes,
+        "storage_path": artifact.storage_path,
+        "storage_backend": artifact.storage_backend,
+        "storage_key": artifact.storage_key,
         "parent_artifact_id": artifact.parent_artifact_id,
         "root_artifact_id": artifact.root_artifact_id,
         "revision_number": artifact.revision_number,
@@ -249,6 +269,12 @@ async def create_running_artifact(
         run_id=run_id,
         original_name=original_name,
     )
+    storage_key = _build_storage_key(
+        thread_id=thread_id,
+        artifact_type=artifact_type,
+        run_id=run_id,
+        stored_name=stored_name,
+    )
     extension = Path(original_name).suffix.lower()
     mime_type = ARTIFACT_MIME_TYPES.get(extension, _guess_mime_type(original_name))
     initial_revision = revision_number or 1
@@ -269,6 +295,8 @@ async def create_running_artifact(
         mime_type=mime_type,
         size_bytes=0,
         storage_path=str(storage_path),
+        storage_backend=get_storage_service().backend_type,
+        storage_key=storage_key,
         status=ARTIFACT_STATUS_RUNNING,
         error_message=None,
     )
@@ -315,9 +343,21 @@ async def mark_artifact_ready(
     if not source_path.exists() or not source_path.is_file():
         raise FileNotFoundError(f"Artifact output file not found: {source_path}")
 
-    destination_path = Path(artifact.storage_path)
-    destination_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_path, destination_path)
+    storage_key = artifact.storage_key or _build_storage_key(
+        thread_id=artifact.thread_id,
+        artifact_type=artifact.artifact_type,  # type: ignore[arg-type]
+        run_id=f"artifact-{artifact.id}",
+        stored_name=artifact.stored_name or source_path.name,
+    )
+    stored_object = get_storage_service().put_file(
+        key=storage_key,
+        source_path=source_path,
+        filename=source_path.name,
+        mime_type=ARTIFACT_MIME_TYPES.get(
+            source_path.suffix.lower(),
+            _guess_mime_type(source_path.name, artifact.mime_type),
+        ),
+    )
 
     current_stmt = select(ArtifactFile).where(
         ArtifactFile.thread_id == artifact.thread_id,
@@ -332,13 +372,16 @@ async def mark_artifact_ready(
 
     artifact.title = (title or artifact.title).strip() or artifact.title
     artifact.original_name = source_path.name
+    artifact.stored_name = source_path.name
     artifact.extension = source_path.suffix.lower()
     artifact.mime_type = ARTIFACT_MIME_TYPES.get(
         artifact.extension,
         _guess_mime_type(source_path.name, artifact.mime_type),
     )
-    artifact.size_bytes = destination_path.stat().st_size
-    artifact.storage_path = str(destination_path)
+    artifact.size_bytes = stored_object.size_bytes
+    artifact.storage_path = stored_object.storage_path or artifact.storage_path
+    artifact.storage_backend = stored_object.backend
+    artifact.storage_key = stored_object.key
     artifact.status = ARTIFACT_STATUS_READY
     artifact.is_current = True
     artifact.error_message = None
@@ -380,3 +423,25 @@ async def require_artifact_by_id(
             detail=f"Artifact {artifact_id} not found.",
         )
     return artifact
+
+
+@contextlib.contextmanager
+def materialize_artifact_file(artifact: ArtifactFile) -> Iterator[Path]:
+    with get_storage_service().materialize_temp_file(
+        storage_backend=artifact.storage_backend,
+        storage_key=artifact.storage_key,
+        storage_path=artifact.storage_path,
+        suffix=artifact.extension or Path(artifact.original_name).suffix,
+    ) as file_path:
+        yield file_path
+
+
+@contextlib.contextmanager
+def materialize_artifact_payload(source_artifact: dict[str, object]) -> Iterator[Path]:
+    with get_storage_service().materialize_temp_file(
+        storage_backend=source_artifact.get("storage_backend") if isinstance(source_artifact.get("storage_backend"), str) else None,
+        storage_key=source_artifact.get("storage_key") if isinstance(source_artifact.get("storage_key"), str) else None,
+        storage_path=source_artifact.get("storage_path") if isinstance(source_artifact.get("storage_path"), str) else None,
+        suffix=Path(str(source_artifact.get("original_name") or "")).suffix,
+    ) as file_path:
+        yield file_path

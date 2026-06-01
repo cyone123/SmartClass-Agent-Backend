@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from fastapi import UploadFile
 from langchain_core.documents import Document
 
+from app.core.storage import LOCAL_STORAGE_BACKEND, reset_storage_service_for_tests
 from app.core.rag import RagRuntime
 from app.models.file import KnowledgeFile
 from app.services import file_service
@@ -20,16 +23,29 @@ class FakeAsyncSession:
         return None
 
 
+class FakeUploadSession(FakeAsyncSession):
+    def __init__(self) -> None:
+        self.added = None
+
+    def add(self, record) -> None:
+        self.added = record
+
+    async def flush(self) -> None:
+        if self.added is not None and self.added.id is None:
+            self.added.id = 42
+
+
 class FakeRagRuntime:
     def __init__(self) -> None:
         self.deleted_file_ids: list[int] = []
         self.added_documents: list[Document] = []
+        self.loaded_file_contents: list[bytes] = []
 
     def supports_file_extension(self, extension: str | None) -> bool:
         return extension in {".docx", ".txt", ".pdf", ".md", ".markdown", ".csv", ".json"}
 
     async def load_and_split_file(self, file_path: str) -> list[Document]:
-        _ = file_path
+        self.loaded_file_contents.append(Path(file_path).read_bytes())
         return [Document(page_content="docx chunk", metadata={"source": file_path})]
 
     async def delete_by_file_id(self, file_id: int) -> None:
@@ -106,6 +122,8 @@ def test_process_file_ingestion_supports_docx_files(tmp_path: Path, monkeypatch)
             size_bytes=docx_path.stat().st_size,
             sha256="d" * 64,
             storage_path=str(docx_path),
+            storage_backend=None,
+            storage_key=None,
             status=file_service.FILE_STATUS_UPLOADED,
             error_message=None,
             chunk_count=0,
@@ -144,5 +162,106 @@ def test_process_file_ingestion_supports_docx_files(tmp_path: Path, monkeypatch)
         assert knowledge_file.status == file_service.FILE_STATUS_READY
         assert knowledge_file.chunk_count == 1
         assert knowledge_file.indexed_at is not None
+
+    asyncio.run(run())
+
+
+def test_create_knowledge_file_from_upload_uses_storage_service(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    async def run() -> None:
+        monkeypatch.setenv("STORAGE_BACKEND", "local")
+        monkeypatch.setenv("FILE_STORAGE_ROOT", str(tmp_path / "objects"))
+        reset_storage_service_for_tests()
+
+        async def fake_ensure_plan_exists(db, plan_id):
+            _ = db, plan_id
+            return object()
+
+        async def fake_get_existing_file_by_hash(db, *, plan_id, sha256):
+            _ = db, plan_id, sha256
+            return None
+
+        monkeypatch.setattr(file_service, "ensure_plan_exists", fake_ensure_plan_exists)
+        monkeypatch.setattr(file_service, "get_existing_file_by_hash", fake_get_existing_file_by_hash)
+
+        upload = UploadFile(
+            file=BytesIO(b"lesson knowledge"),
+            filename="lesson.txt",
+        )
+        db = FakeUploadSession()
+
+        record = await file_service.create_file_from_upload(
+            db,
+            plan_id=7,
+            upload_file=upload,
+        )
+
+        assert record.storage_backend == LOCAL_STORAGE_BACKEND
+        assert record.storage_key == "knowledge/plan-7/file-42/lesson.txt"
+        assert record.storage_path
+        assert Path(record.storage_path).read_bytes() == b"lesson knowledge"
+        assert record.status == file_service.FILE_STATUS_UPLOADED
+
+        reset_storage_service_for_tests()
+
+    asyncio.run(run())
+
+
+def test_process_file_ingestion_materializes_object_backed_knowledge_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    async def run() -> None:
+        monkeypatch.setenv("STORAGE_BACKEND", "local")
+        monkeypatch.setenv("FILE_STORAGE_ROOT", str(tmp_path / "objects"))
+        reset_storage_service_for_tests()
+
+        upload = UploadFile(
+            file=BytesIO(b"object backed lesson"),
+            filename="lesson.txt",
+        )
+
+        async def fake_ensure_plan_exists(db, plan_id):
+            _ = db, plan_id
+            return object()
+
+        async def fake_get_existing_file_by_hash(db, *, plan_id, sha256):
+            _ = db, plan_id, sha256
+            return None
+
+        monkeypatch.setattr(file_service, "ensure_plan_exists", fake_ensure_plan_exists)
+        monkeypatch.setattr(file_service, "get_existing_file_by_hash", fake_get_existing_file_by_hash)
+
+        db = FakeUploadSession()
+        knowledge_file = await file_service.create_file_from_upload(
+            db,
+            plan_id=7,
+            upload_file=upload,
+        )
+
+        async def fake_get_file_by_id(db, file_id, *, include_deleted=False):
+            _ = db, include_deleted
+            if file_id == knowledge_file.id:
+                return knowledge_file
+            return None
+
+        monkeypatch.setattr(file_service, "get_file_by_id", fake_get_file_by_id)
+        rag_runtime = FakeRagRuntime()
+
+        await file_service.process_file_ingestion(
+            db,
+            file_id=knowledge_file.id,
+            rag_runtime=rag_runtime,
+        )
+
+        assert rag_runtime.deleted_file_ids == [knowledge_file.id]
+        assert rag_runtime.loaded_file_contents == [b"object backed lesson"]
+        assert len(rag_runtime.added_documents) == 1
+        assert rag_runtime.added_documents[0].metadata["source"].endswith("lesson.txt")
+        assert knowledge_file.status == file_service.FILE_STATUS_READY
+
+        reset_storage_service_for_tests()
 
     asyncio.run(run())

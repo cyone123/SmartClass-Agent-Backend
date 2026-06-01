@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
-import os
 import re
+import contextlib
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterator
 
 from app.core.progress import ProgressReporter
+from app.core.storage import build_storage_key, get_storage_service
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,6 +58,20 @@ def _build_storage_path(plan_id: int, file_id: int, original_name: str) -> tuple
     return stored_name, storage_path
 
 
+def _build_knowledge_storage_key(
+    *,
+    plan_id: int,
+    file_id: int,
+    stored_name: str,
+) -> str:
+    return build_storage_key(
+        "knowledge",
+        f"plan-{plan_id}",
+        f"file-{file_id}",
+        stored_name,
+    )
+
+
 def _build_attachment_storage_path(
     plan_id: int,
     thread_id: str,
@@ -69,6 +84,22 @@ def _build_attachment_storage_path(
         get_file_storage_root() / "attachments" / thread_id / stored_name
     )
     return stored_name, storage_path
+
+
+def _build_attachment_storage_key(
+    *,
+    plan_id: int,
+    thread_id: str,
+    attachment_id: int,
+    stored_name: str,
+) -> str:
+    return build_storage_key(
+        "attachments",
+        f"plan-{plan_id}",
+        f"thread-{thread_id}",
+        f"attachment-{attachment_id}",
+        stored_name,
+    )
 
 
 def _normalize_extension(extension: str | None) -> str:
@@ -271,11 +302,23 @@ async def create_file_from_upload(
     await db.flush()
 
     stored_name, storage_path = _build_storage_path(plan_id, file_record.id, original_name)
-    storage_path.parent.mkdir(parents=True, exist_ok=True)
-    storage_path.write_bytes(content)
+    storage_key = _build_knowledge_storage_key(
+        plan_id=plan_id,
+        file_id=file_record.id,
+        stored_name=stored_name,
+    )
+    stored_object = get_storage_service().put_bytes(
+        key=storage_key,
+        data=content,
+        filename=stored_name,
+        mime_type=mime_type,
+        sha256=sha256,
+    )
 
     file_record.stored_name = stored_name
-    file_record.storage_path = str(storage_path)
+    file_record.storage_path = stored_object.storage_path or str(storage_path)
+    file_record.storage_backend = stored_object.backend
+    file_record.storage_key = stored_object.key
     file_record.updated_at = datetime.now(timezone.utc)
 
     await db.commit()
@@ -328,11 +371,24 @@ async def create_attachment_from_upload(
         attachment_record.id,
         original_name,
     )
-    storage_path.parent.mkdir(parents=True, exist_ok=True)
-    storage_path.write_bytes(content)
+    storage_key = _build_attachment_storage_key(
+        plan_id=plan_id,
+        thread_id=thread_id,
+        attachment_id=attachment_record.id,
+        stored_name=stored_name,
+    )
+    stored_object = get_storage_service().put_bytes(
+        key=storage_key,
+        data=content,
+        filename=stored_name,
+        mime_type=mime_type,
+        sha256=sha256,
+    )
 
     attachment_record.stored_name = stored_name
-    attachment_record.storage_path = str(storage_path)
+    attachment_record.storage_path = stored_object.storage_path or str(storage_path)
+    attachment_record.storage_backend = stored_object.backend
+    attachment_record.storage_key = stored_object.key
     attachment_record.updated_at = datetime.now(timezone.utc)
 
     await db.commit()
@@ -385,11 +441,24 @@ async def create_voice_attachment_from_upload(
         attachment_record.id,
         original_name,
     )
-    storage_path.parent.mkdir(parents=True, exist_ok=True)
-    storage_path.write_bytes(content)
+    storage_key = _build_attachment_storage_key(
+        plan_id=plan_id,
+        thread_id=thread_id,
+        attachment_id=attachment_record.id,
+        stored_name=stored_name,
+    )
+    stored_object = get_storage_service().put_bytes(
+        key=storage_key,
+        data=content,
+        filename=stored_name,
+        mime_type=mime_type,
+        sha256=sha256,
+    )
 
     attachment_record.stored_name = stored_name
-    attachment_record.storage_path = str(storage_path)
+    attachment_record.storage_path = stored_object.storage_path or str(storage_path)
+    attachment_record.storage_backend = stored_object.backend
+    attachment_record.storage_key = stored_object.key
     attachment_record.updated_at = datetime.now(timezone.utc)
 
     await db.commit()
@@ -444,10 +513,10 @@ async def get_attachment_storage_paths_by_ids(
         thread_id=thread_id,
         attachment_ids=attachment_ids,
     )
-    storage_paths: list[str] = []
-    for attachment in attachments:
-        storage_paths.append(attachment.storage_path)
-    return storage_paths
+    # Legacy compatibility helper: callers that still expect storage paths should
+    # continue to receive the record field, while new analysis paths use the
+    # materialize_attachment_* context managers.
+    return [attachment.storage_path for attachment in attachments]
 
 
 async def get_chat_attachments_by_ids(
@@ -472,12 +541,51 @@ async def get_chat_attachments_by_ids(
                     "used for chat attachment analysis."
                 ),
             )
-        if not attachment.storage_path or not Path(attachment.storage_path).exists():
+        if not get_storage_service().exists(
+            storage_backend=attachment.storage_backend,
+            storage_key=attachment.storage_key,
+            storage_path=attachment.storage_path,
+        ):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Stored attachment content not found for attachment {attachment.id}.",
             )
     return attachments
+
+
+@contextlib.contextmanager
+def materialize_attachment_file(attachment: AttachmentFile) -> Iterator[Path]:
+    with get_storage_service().materialize_temp_file(
+        storage_backend=attachment.storage_backend,
+        storage_key=attachment.storage_key,
+        storage_path=attachment.storage_path,
+        suffix=attachment.extension or Path(attachment.original_name).suffix,
+    ) as file_path:
+        yield file_path
+
+
+@contextlib.contextmanager
+def materialize_attachment_files(attachments: list[AttachmentFile]) -> Iterator[list[Path]]:
+    stack = contextlib.ExitStack()
+    try:
+        paths = [
+            stack.enter_context(materialize_attachment_file(attachment))
+            for attachment in attachments
+        ]
+        yield paths
+    finally:
+        stack.close()
+
+
+@contextlib.contextmanager
+def materialize_knowledge_file(file_record: KnowledgeFile) -> Iterator[Path]:
+    with get_storage_service().materialize_temp_file(
+        storage_backend=file_record.storage_backend,
+        storage_key=file_record.storage_key,
+        storage_path=file_record.storage_path,
+        suffix=file_record.extension or Path(file_record.original_name).suffix,
+    ) as file_path:
+        yield file_path
 
 
 async def parse_attachment_files(
@@ -576,11 +684,12 @@ async def delete_file(
     await rag_runtime.delete_by_file_id(file_id)
     await mark_file_deleted(db, file_record)
 
-    if file_record.storage_path:
-        try:
-            os.remove(file_record.storage_path)
-        except FileNotFoundError:
-            pass
+    if file_record.storage_path or file_record.storage_key:
+        get_storage_service().delete(
+            storage_backend=file_record.storage_backend,
+            storage_key=file_record.storage_key,
+            storage_path=file_record.storage_path,
+        )
 
 
 async def get_recoverable_file_ids(db: AsyncSession) -> list[int]:
@@ -617,10 +726,15 @@ async def process_file_ingestion(
     try:
         if not rag_runtime.supports_file_extension(file_record.extension):
             raise ValueError(f"Unsupported extension for ingestion: {file_record.extension}")
-        if not file_record.storage_path or not Path(file_record.storage_path).exists():
-            raise FileNotFoundError(f"Missing storage file: {file_record.storage_path}")
+        if not get_storage_service().exists(
+            storage_backend=file_record.storage_backend,
+            storage_key=file_record.storage_key,
+            storage_path=file_record.storage_path,
+        ):
+            raise FileNotFoundError(f"Missing stored file: {file_record.storage_path}")
 
-        documents = await rag_runtime.load_and_split_file(file_record.storage_path)
+        with materialize_knowledge_file(file_record) as file_path:
+            documents = await rag_runtime.load_and_split_file(str(file_path))
         enriched_documents = []
         for index, document in enumerate(documents):
             page = document.metadata.get("page")

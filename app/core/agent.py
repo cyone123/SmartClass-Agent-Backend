@@ -341,6 +341,8 @@ def _artifact_catalog_entry(record: ArtifactFile) -> dict[str, Any]:
         "thread_id": record.thread_id,
         "plan_id": record.plan_id,
         "storage_path": record.storage_path,
+        "storage_backend": record.storage_backend,
+        "storage_key": record.storage_key,
         "revision_number": record.revision_number,
         "parent_artifact_id": record.parent_artifact_id,
         "root_artifact_id": record.root_artifact_id,
@@ -775,15 +777,15 @@ class AgentRuntime:
     def _partition_attachments(
         self,
         attachments: list[AttachmentFile],
-    ) -> tuple[list[str], list[AttachmentFile]]:
-        document_paths: list[str] = []
+    ) -> tuple[list[AttachmentFile], list[AttachmentFile]]:
+        document_attachments: list[AttachmentFile] = []
         video_attachments: list[AttachmentFile] = []
         for attachment in attachments:
             if file_service.is_video_attachment_record(attachment):
                 video_attachments.append(attachment)
             else:
-                document_paths.append(attachment.storage_path)
-        return document_paths, video_attachments
+                document_attachments.append(attachment)
+        return document_attachments, video_attachments
 
     async def build_attachment_text(
         self,
@@ -795,26 +797,28 @@ class AgentRuntime:
         progress_reporter: ProgressReporter | None = None,
     ) -> str:
         sections: list[str] = []
-        document_paths, video_attachments = self._partition_attachments(attachments)
+        document_attachments, video_attachments = self._partition_attachments(attachments)
 
-        if document_paths:
-            document_summary = await self.analyze_attachments(
-                message,
-                document_paths,
-                thread_id=thread_id,
-                run_id=run_id,
-                progress_reporter=progress_reporter,
-            )
+        if document_attachments:
+            with file_service.materialize_attachment_files(document_attachments) as document_paths:
+                document_summary = await self.analyze_attachments(
+                    message,
+                    [str(path) for path in document_paths],
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    progress_reporter=progress_reporter,
+                )
             if document_summary.strip():
-                sections.append(f"文档附件摘要：\n{document_summary.strip()}")
+                sections.append(f"文档附件摘要n{document_summary.strip()}")
 
         for attachment in video_attachments:
-            video_summary = await self.video_transcription_runtime.analyze(
-                file_path=Path(attachment.storage_path),
-                filename=attachment.original_name,
-                mime_type=attachment.mime_type,
-                progress_reporter=progress_reporter,
-            )
+            with file_service.materialize_attachment_file(attachment) as video_path:
+                video_summary = await self.video_transcription_runtime.analyze(
+                    file_path=video_path,
+                    filename=attachment.original_name,
+                    mime_type=attachment.mime_type,
+                    progress_reporter=progress_reporter,
+                )
             if video_summary.strip():
                 sections.append(video_summary.strip())
 
@@ -1257,14 +1261,13 @@ class AgentRuntime:
         state: TeachingAssistantState,
         agent_config: RunnableConfig,
     ) -> None:
-        source_path = Path(str(source_artifact.get("storage_path") or "")).resolve()
-        if not source_path.exists() or not source_path.is_file():
-            raise FileNotFoundError(f"Source artifact file not found: {source_path}")
-
         self._clear_workspace_for_job(agent_config)
         paths = get_workspace_paths(agent_config)
         workspace_source = paths.workspace_root / ARTIFACT_SOURCE_FILENAMES[artifact_type]
-        shutil.copy2(source_path, workspace_source)
+        with artifact_service.materialize_artifact_payload(source_artifact) as source_path:
+            if not source_path.exists() or not source_path.is_file():
+                raise FileNotFoundError(f"Source artifact file not found: {source_path}")
+            shutil.copy2(source_path, workspace_source)
 
         revision_request = {
             "artifact_type": artifact_type,

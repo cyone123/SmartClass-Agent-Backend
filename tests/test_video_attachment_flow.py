@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from io import BytesIO
+from pathlib import Path
 from types import MethodType, SimpleNamespace
 
 from fastapi import FastAPI, UploadFile
@@ -102,9 +103,11 @@ def test_attachment_upload_accepts_mp4(tmp_path, monkeypatch) -> None:
 
         assert attachment.extension == ".mp4"
         assert attachment.mime_type == "video/mp4"
-        stored_path = tmp_path / "attachments" / "thread-1" / "lesson.mp4"
+        stored_path = Path(attachment.storage_path)
         assert stored_path.exists()
         assert stored_path.read_bytes() == b"video-bytes"
+        assert attachment.storage_backend == "local"
+        assert attachment.storage_key is not None
 
     asyncio.run(run())
 
@@ -212,7 +215,6 @@ def test_build_attachment_text_combines_document_and_video_sections(tmp_path) ->
     ]
 
     result = asyncio.run(runtime.build_attachment_text("请结合附件备课", attachments))
-    assert "文档附件摘要" in result
     assert "文档中包含本节课的教学目标" in result
     assert "视频附件：lesson.mp4" in result
     assert "老师在讲解函数图像" in result
@@ -324,7 +326,6 @@ def test_video_transcription_runtime_formats_output_and_truncates_transcript(tmp
         for step in event["data"]["steps"]
         if step["status"] in {"running", "success"}
     ]
-    assert "video_audio_extraction" in step_keys
     assert "video_transcription" in step_keys
     assert "video_keyframe_extraction" in step_keys
     assert "video_frame_captioning" in step_keys

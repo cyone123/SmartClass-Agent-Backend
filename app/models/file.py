@@ -29,6 +29,8 @@ class KnowledgeFile(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    storage_backend: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    storage_key: Mapped[str | None] = mapped_column(String(1024), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -69,6 +71,8 @@ class AttachmentFile(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    storage_backend: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    storage_key: Mapped[str | None] = mapped_column(String(1024), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -117,6 +121,8 @@ class ArtifactFile(Base):
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    storage_backend: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    storage_key: Mapped[str | None] = mapped_column(String(1024), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

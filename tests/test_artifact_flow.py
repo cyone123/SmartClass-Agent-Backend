@@ -10,6 +10,7 @@ from fastapi.encoders import jsonable_encoder
 from httpx import ASGITransport, AsyncClient
 
 from app.api.file import router as file_router
+from app.core.storage import get_storage_service, reset_storage_service_for_tests
 from app.dependencies.db import get_db
 from app.models.file import ArtifactFile, KnowledgeFile
 from app.services import artifact_service, file_service
@@ -84,6 +85,7 @@ def test_artifact_service_creates_persists_and_lists_artifacts(
 
     async def run() -> None:
         monkeypatch.setenv("FILE_STORAGE_ROOT", str(tmp_path))
+        reset_storage_service_for_tests()
         monkeypatch.setattr(artifact_service, "ensure_plan_exists", _noop)
         monkeypatch.setattr(artifact_service, "ensure_thread_belongs_to_plan", _noop)
         db = FakeAsyncSession()
@@ -98,6 +100,8 @@ def test_artifact_service_creates_persists_and_lists_artifacts(
         )
         assert running.status == artifact_service.ARTIFACT_STATUS_RUNNING
         assert "artifacts" in running.storage_path
+        assert running.storage_backend == get_storage_service().backend_type
+        assert running.storage_key is not None
 
         generated_html = tmp_path / "generated.html"
         generated_html.write_text("<html><body>quiz</body></html>", encoding="utf-8")
@@ -109,9 +113,12 @@ def test_artifact_service_creates_persists_and_lists_artifacts(
             title="课堂互动",
         )
         assert ready.status == artifact_service.ARTIFACT_STATUS_READY
-        stored_path = Path(ready.storage_path)
-        assert stored_path.exists()
-        assert stored_path.read_text(encoding="utf-8") == "<html><body>quiz</body></html>"
+        assert ready.storage_key is not None
+        assert get_storage_service().read_bytes(
+            storage_backend=ready.storage_backend,
+            storage_key=ready.storage_key,
+            storage_path=ready.storage_path,
+        ) == b"<html><body>quiz</body></html>"
 
         failed = await artifact_service.create_running_artifact(
             db,
@@ -145,6 +152,7 @@ def test_artifact_service_creates_revision_versions_and_updates_current_flags(
 
     async def run() -> None:
         monkeypatch.setenv("FILE_STORAGE_ROOT", str(tmp_path))
+        reset_storage_service_for_tests()
         monkeypatch.setattr(artifact_service, "ensure_plan_exists", _noop)
         monkeypatch.setattr(artifact_service, "ensure_thread_belongs_to_plan", _noop)
         db = FakeAsyncSession()
@@ -214,6 +222,7 @@ def test_artifact_service_lists_only_ready_current_artifacts_for_revision_catalo
 
     async def run() -> None:
         monkeypatch.setenv("FILE_STORAGE_ROOT", str(tmp_path))
+        reset_storage_service_for_tests()
         monkeypatch.setattr(artifact_service, "ensure_plan_exists", _noop)
         monkeypatch.setattr(artifact_service, "ensure_thread_belongs_to_plan", _noop)
         db = FakeAsyncSession()
@@ -310,6 +319,8 @@ def test_file_api_supports_artifact_download_and_public_config(
             mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             size_bytes=artifact_docx_path.stat().st_size,
             storage_path=str(artifact_docx_path),
+            storage_backend=None,
+            storage_key=None,
             status="ready",
             error_message=None,
             created_at=now,
@@ -327,6 +338,8 @@ def test_file_api_supports_artifact_download_and_public_config(
             mime_type="text/html",
             size_bytes=artifact_html_path.stat().st_size,
             storage_path=str(artifact_html_path),
+            storage_backend=None,
+            storage_key=None,
             status="ready",
             error_message=None,
             created_at=now,
@@ -375,7 +388,7 @@ def test_file_api_supports_artifact_download_and_public_config(
             config_payload = artifact_config.json()
             assert config_payload["document"]["url"].startswith("https://public.example.com/file/download/artifact/")
             assert config_payload["editorConfig"]["callbackUrl"] == "https://public.example.com/file/callback"
-            assert config_payload["editorConfig"]["mode"] == "view"
+            assert config_payload["editorConfig"]["mode"] == "edit"
 
             knowledge_config = await client.get(f"/file/config/knowledge/{knowledge.id}")
             assert knowledge_config.status_code == 200

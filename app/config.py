@@ -75,6 +75,57 @@ def get_public_api_base_url() -> str | None:
     return normalized or None
 
 
+def get_storage_backend() -> str:
+    return (get_env("STORAGE_BACKEND", "local") or "local").strip().lower()
+
+
+def get_minio_endpoint() -> str | None:
+    configured = get_env("MINIO_ENDPOINT")
+    if configured is None:
+        return None
+    return configured.strip() or None
+
+
+def get_minio_bucket() -> str | None:
+    configured = get_env("MINIO_BUCKET")
+    if configured is None:
+        return None
+    return configured.strip() or None
+
+
+def get_minio_access_key() -> str | None:
+    configured = get_env("MINIO_ACCESS_KEY")
+    if configured is None:
+        return None
+    return configured.strip() or None
+
+
+def get_minio_secret_key() -> str | None:
+    configured = get_env("MINIO_SECRET_KEY")
+    if configured is None:
+        return None
+    return configured.strip() or None
+
+
+def get_minio_region() -> str | None:
+    configured = get_env("MINIO_REGION")
+    if configured is None:
+        return None
+    return configured.strip() or None
+
+
+def get_minio_secure() -> bool:
+    return _get_bool_env("MINIO_SECURE", False)
+
+
+def get_storage_presigned_url_ttl_seconds() -> int:
+    return _get_int_env("STORAGE_PRESIGNED_URL_TTL_SECONDS", 900)
+
+
+def get_storage_download_mode() -> str:
+    return (get_env("STORAGE_DOWNLOAD_MODE", "proxy") or "proxy").strip().lower()
+
+
 def get_file_upload_max_size_bytes() -> int:
     value = get_env("FILE_UPLOAD_MAX_SIZE_BYTES", "20971520") or "20971520"
     return int(value)

@@ -103,17 +103,12 @@ class VideoTranscriptionRuntime:
 
             print(f"[video] analyze start filename={filename} file_path={file_path}")
 
-            # if progress_reporter is not None:
-            #     progress_reporter.emit(
-            #         VIDEO_AUDIO_EXTRACTION_STEP,
-            #         "running",
-            #         detail=f"正在抽取视频音频：{filename}",
-            #     )
-            progress_reporter.emit(
-                        VIDEO_TRANSCRIPTION_STEP,
-                        "running",
-                        detail=f"正在转写视频音频：{filename}",
-                    )
+            if progress_reporter is not None:
+                progress_reporter.emit(
+                    VIDEO_TRANSCRIPTION_STEP,
+                    "running",
+                    detail=f"正在转写视频音频：{filename}",
+                )
             try:
                 await self.extract_audio(file_path=file_path, output_path=audio_path)
             except RuntimeError as exc:

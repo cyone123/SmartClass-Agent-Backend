@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import os
@@ -15,13 +14,14 @@ from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_public_api_base_url
+from app.config import get_public_api_base_url, get_storage_download_mode
 from app.core.file_ingestion import FileIngestionRuntime, get_file_ingestion_runtime
 from app.core.rag import RagRuntime, get_rag_runtime, supports_knowledge_file_extension
 from app.core.speech import SpeechRuntime, get_speech_runtime
+from app.core.storage import get_storage_service
 from app.dependencies.db import get_db
 from app.models.file import ArtifactFile as ArtifactFileModel
 from app.models.file import KnowledgeFile as KnowledgeFileModel
@@ -121,14 +121,39 @@ async def _require_ready_html_artifact(
             detail="HTML preview is only supported for html-game artifacts.",
         )
 
-    storage_path = Path(artifact.storage_path)
-    if not storage_path.exists() or not storage_path.is_file():
+    if not get_storage_service().exists(
+        storage_backend=artifact.storage_backend,
+        storage_key=artifact.storage_key,
+        storage_path=artifact.storage_path,
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Stored file content not found.",
         )
 
     return artifact
+
+
+async def _require_existing_knowledge_file(
+    db: AsyncSession,
+    file_id: int,
+) -> KnowledgeFileModel:
+    file_record = await file_service.get_file_by_id(db, file_id)
+    if file_record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Knowledge file {file_id} not found.",
+        )
+    if not get_storage_service().exists(
+        storage_backend=file_record.storage_backend,
+        storage_key=file_record.storage_key,
+        storage_path=file_record.storage_path,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Stored file content not found.",
+        )
+    return file_record
 
 
 def _parse_onlyoffice_key(key: str | None) -> tuple[FileKind, int]:
@@ -186,6 +211,33 @@ def _download_onlyoffice_document(
     )
 
 
+def _download_onlyoffice_document_bytes(*, url: str) -> tuple[bytes, _DownloadedFileMetadata]:
+    parsed_url = urlsplit(url)
+    if parsed_url.scheme not in {"http", "https"}:
+        raise ValueError("ONLYOFFICE callback url must use http or https.")
+
+    sha256 = hashlib.sha256()
+    chunks: list[bytes] = []
+    size_bytes = 0
+    request = UrlRequest(
+        url,
+        headers={"User-Agent": "SmartClass-OnlyOffice-Callback/1.0"},
+    )
+    with urlopen(request, timeout=60) as response:
+        while True:
+            chunk = response.read(REMOTE_DOWNLOAD_CHUNK_SIZE)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            sha256.update(chunk)
+            size_bytes += len(chunk)
+
+    return b"".join(chunks), _DownloadedFileMetadata(
+        size_bytes=size_bytes,
+        sha256=sha256.hexdigest(),
+    )
+
+
 async def _save_onlyoffice_file(
     *,
     db: AsyncSession,
@@ -201,12 +253,40 @@ async def _save_onlyoffice_file(
             detail=f"{file_kind.title()} file {file_id} not found.",
         )
 
-    destination_path = Path(file_record.storage_path)
-    metadata = await asyncio.to_thread(
-        _download_onlyoffice_document,
-        url=file_url,
-        destination_path=destination_path,
-    )
+    if file_kind == "artifact":
+        data, metadata = _download_onlyoffice_document_bytes(url=file_url)
+        if file_record.storage_key:
+            stored_object = get_storage_service().put_bytes(
+                key=file_record.storage_key,
+                data=data,
+                filename=file_record.original_name,
+                mime_type=file_record.mime_type,
+                sha256=metadata.sha256,
+            )
+            file_record.storage_backend = stored_object.backend
+            file_record.storage_key = stored_object.key
+            file_record.storage_path = stored_object.storage_path or file_record.storage_path
+        else:
+            destination_path = Path(file_record.storage_path)
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            destination_path.write_bytes(data)
+    else:
+        data, metadata = _download_onlyoffice_document_bytes(url=file_url)
+        if file_record.storage_key:
+            stored_object = get_storage_service().put_bytes(
+                key=file_record.storage_key,
+                data=data,
+                filename=file_record.original_name,
+                mime_type=file_record.mime_type,
+                sha256=metadata.sha256,
+            )
+            file_record.storage_backend = stored_object.backend
+            file_record.storage_key = stored_object.key
+            file_record.storage_path = stored_object.storage_path or file_record.storage_path
+        else:
+            destination_path = Path(file_record.storage_path)
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            destination_path.write_bytes(data)
 
     file_record.size_bytes = metadata.size_bytes
     file_record.updated_at = datetime.now(timezone.utc)
@@ -312,11 +392,12 @@ async def transcribe_voice_attachment(
         upload_file=file,
     )
     try:
-        transcription = await speech_runtime.transcribe(
-            file_path=Path(attachment_record.storage_path),
-            filename=attachment_record.original_name,
-            mime_type=attachment_record.mime_type,
-        )
+        with file_service.materialize_attachment_file(attachment_record) as voice_path:
+            transcription = await speech_runtime.transcribe(
+                file_path=voice_path,
+                filename=attachment_record.original_name,
+                mime_type=attachment_record.mime_type,
+            )
     except RuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -367,18 +448,66 @@ async def download_file_resource(
             detail=f"{file_kind.title()} file {file_id} not found.",
         )
 
-    storage_path = Path(file_record.storage_path)
-    if not storage_path.exists():
+    if file_kind == "knowledge":
+        if not get_storage_service().exists(
+            storage_backend=file_record.storage_backend,
+            storage_key=file_record.storage_key,
+            storage_path=file_record.storage_path,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Stored file content not found.",
+            )
+        filename = getattr(file_record, "original_name", Path(file_record.storage_path).name)
+        if get_storage_download_mode() == "presigned":
+            presigned_url = get_storage_service().presigned_get_url(
+                storage_backend=file_record.storage_backend,
+                storage_key=file_record.storage_key,
+                storage_path=file_record.storage_path,
+                filename=filename,
+            )
+            if presigned_url:
+                return RedirectResponse(presigned_url)
+        data = get_storage_service().read_bytes(
+            storage_backend=file_record.storage_backend,
+            storage_key=file_record.storage_key,
+            storage_path=file_record.storage_path,
+        )
+        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+        return Response(content=data, media_type=file_record.mime_type, headers=headers)
+
+    if file_record.status != artifact_service.ARTIFACT_STATUS_READY:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Artifact download is only available for ready artifacts.",
+        )
+    if not get_storage_service().exists(
+        storage_backend=file_record.storage_backend,
+        storage_key=file_record.storage_key,
+        storage_path=file_record.storage_path,
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Stored file content not found.",
         )
-    filename = getattr(file_record, "original_name", storage_path.name)
-    return FileResponse(
-        path=storage_path,
-        media_type=file_record.mime_type,
-        filename=filename,
+    filename = getattr(file_record, "original_name", Path(file_record.storage_path).name)
+    if get_storage_download_mode() == "presigned":
+        presigned_url = get_storage_service().presigned_get_url(
+            storage_backend=file_record.storage_backend,
+            storage_key=file_record.storage_key,
+            storage_path=file_record.storage_path,
+            filename=filename,
+        )
+        if presigned_url:
+            return RedirectResponse(presigned_url)
+
+    data = get_storage_service().read_bytes(
+        storage_backend=file_record.storage_backend,
+        storage_key=file_record.storage_key,
+        storage_path=file_record.storage_path,
     )
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return Response(content=data, media_type=file_record.mime_type, headers=headers)
 
 
 @router.get("/file/content/artifact/{file_id}", name="artifact_html_content")
@@ -387,9 +516,12 @@ async def get_artifact_html_content(
     db: AsyncSession = Depends(get_db),
 ):
     artifact = await _require_ready_html_artifact(db, file_id)
-    storage_path = Path(artifact.storage_path)
     try:
-        content = storage_path.read_text(encoding="utf-8")
+        content = get_storage_service().read_bytes(
+            storage_backend=artifact.storage_backend,
+            storage_key=artifact.storage_key,
+            storage_path=artifact.storage_path,
+        ).decode("utf-8")
     except UnicodeDecodeError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -490,7 +622,7 @@ async def get_file_config(
     )
     callback_url = _build_public_url(request, "handle_callback")
     key_timestamp = int(file_record.updated_at.timestamp()) if file_record.updated_at else 0
-    document_title = getattr(file_record, "original_name", Path(file_record.storage_path).name)
+    document_title = getattr(file_record, "original_name", None) or Path(file_record.storage_path).name
 
     return {
         "document": {

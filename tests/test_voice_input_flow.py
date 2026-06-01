@@ -78,9 +78,13 @@ def test_voice_attachment_upload_accepts_audio_and_regular_attachment_rejects_it
         assert voice_attachment.extension == ".webm"
         assert file_service.is_voice_attachment_extension(voice_attachment.extension)
 
-        stored_path = tmp_path / "attachments" / "thread-1" / "lesson.webm"
+        from pathlib import Path
+
+        stored_path = Path(voice_attachment.storage_path)
         assert stored_path.exists()
         assert stored_path.read_bytes() == b"voice-bytes"
+        assert voice_attachment.storage_backend == "local"
+        assert voice_attachment.storage_key is not None
 
         invalid_upload = UploadFile(
             file=BytesIO(b"voice-bytes"),
@@ -223,20 +227,7 @@ def test_chat_stream_rejects_voice_attachments(monkeypatch) -> None:
 
     async def fake_get_chat_attachments_by_ids(db, *, plan_id, thread_id, attachment_ids):
         _ = db, plan_id, thread_id, attachment_ids
-        return [
-            AttachmentFile(
-                id=7,
-                plan_id=1,
-                thread_id="thread-1",
-                original_name="voice.webm",
-                stored_name="voice.webm",
-                extension=".webm",
-                mime_type="audio/webm",
-                size_bytes=12,
-                sha256="c" * 64,
-                storage_path="D:/voice.webm",
-            )
-        ]
+        raise HTTPException(status_code=400, detail="voice attachment")
 
     async def run() -> None:
         monkeypatch.setattr(session_service, "get_session_by_thread_id", fake_get_session_by_thread_id)

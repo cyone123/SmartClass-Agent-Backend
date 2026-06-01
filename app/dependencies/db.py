@@ -169,111 +169,32 @@ async def init_db() -> None:
         await conn.execute(
             text(
                 """
-                ALTER TABLE IF EXISTS artifact_files
-                ADD COLUMN IF NOT EXISTS parent_artifact_id INTEGER NULL
+                ALTER TABLE IF EXISTS knowledge_files
+                ADD COLUMN IF NOT EXISTS storage_backend VARCHAR(32) NULL
                 """
             )
         )
         await conn.execute(
             text(
                 """
-                ALTER TABLE IF EXISTS artifact_files
-                ADD COLUMN IF NOT EXISTS root_artifact_id INTEGER NULL
+                ALTER TABLE IF EXISTS knowledge_files
+                ADD COLUMN IF NOT EXISTS storage_key VARCHAR(1024) NULL
                 """
             )
         )
         await conn.execute(
             text(
                 """
-                ALTER TABLE IF EXISTS artifact_files
-                ADD COLUMN IF NOT EXISTS revision_number INTEGER NOT NULL DEFAULT 1
+                CREATE INDEX IF NOT EXISTS ix_knowledge_files_storage_backend
+                ON knowledge_files (storage_backend)
                 """
             )
         )
         await conn.execute(
             text(
                 """
-                ALTER TABLE IF EXISTS artifact_files
-                ADD COLUMN IF NOT EXISTS is_current BOOLEAN NOT NULL DEFAULT TRUE
-                """
-            )
-        )
-        await conn.execute(
-            text(
-                """
-                CREATE INDEX IF NOT EXISTS ix_artifact_files_parent_artifact_id
-                ON artifact_files (parent_artifact_id)
-                """
-            )
-        )
-        await conn.execute(
-            text(
-                """
-                CREATE INDEX IF NOT EXISTS ix_artifact_files_root_artifact_id
-                ON artifact_files (root_artifact_id)
-                """
-            )
-        )
-        await conn.execute(
-            text(
-                """
-                CREATE INDEX IF NOT EXISTS ix_artifact_files_is_current
-                ON artifact_files (is_current)
-                """
-            )
-        )
-        await conn.execute(
-            text(
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1
-                        FROM pg_constraint
-                        WHERE conname = 'fk_artifact_files_parent_artifact_id'
-                    ) THEN
-                        ALTER TABLE artifact_files
-                        ADD CONSTRAINT fk_artifact_files_parent_artifact_id
-                        FOREIGN KEY (parent_artifact_id) REFERENCES artifact_files (id);
-                    END IF;
-
-                    IF NOT EXISTS (
-                        SELECT 1
-                        FROM pg_constraint
-                        WHERE conname = 'fk_artifact_files_root_artifact_id'
-                    ) THEN
-                        ALTER TABLE artifact_files
-                        ADD CONSTRAINT fk_artifact_files_root_artifact_id
-                        FOREIGN KEY (root_artifact_id) REFERENCES artifact_files (id);
-                    END IF;
-                END $$;
-                """
-            )
-        )
-        await conn.execute(
-            text(
-                """
-                UPDATE artifact_files
-                SET root_artifact_id = id
-                WHERE root_artifact_id IS NULL
-                """
-            )
-        )
-        await conn.execute(
-            text(
-                """
-                UPDATE artifact_files
-                SET revision_number = 1
-                WHERE revision_number IS NULL OR revision_number < 1
-                """
-            )
-        )
-        await conn.execute(
-            text(
-                """
-                UPDATE artifact_files
-                SET is_current = TRUE
-                WHERE is_current IS NULL
+                CREATE INDEX IF NOT EXISTS ix_knowledge_files_storage_key
+                ON knowledge_files (storage_key)
                 """
             )
         )

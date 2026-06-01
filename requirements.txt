@@ -12,3 +12,4 @@ psycopg[binary]>=3.3
 psycopg-pool>=3.3
 python-dotenv>=1.0
 daytona>=0.182
+minio>=7.2
