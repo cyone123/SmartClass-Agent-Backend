@@ -13,6 +13,7 @@ from app.api.chat import router as chat_router
 from app.core.agent import AgentRuntime
 from app.core.progress import ProgressReporter, ProgressTracker
 from app.core.speech import TranscriptionResult
+from app.core.auth import get_current_user
 from app.core.video_transcribe import VideoTranscriptionRuntime, VideoVisionConfig
 from app.dependencies.db import get_db
 from app.models.file import AttachmentFile
@@ -99,6 +100,7 @@ def test_attachment_upload_accepts_mp4(tmp_path, monkeypatch) -> None:
             plan_id=1,
             thread_id="thread-1",
             upload_file=upload,
+            user_id=1,
         )
 
         assert attachment.extension == ".mp4"
@@ -122,12 +124,12 @@ def test_chat_stream_passes_video_attachments_to_agent_runtime(monkeypatch, tmp_
             captured["kwargs"] = kwargs
             yield {"event": "token", "data": {"run_id": kwargs["run_id"], "text": "ok"}}
 
-    async def fake_get_session_by_thread_id(db, thread_id):
-        _ = db
+    async def fake_get_session_by_thread_id(db, thread_id, *, user_id=None):
+        _ = db, user_id
         return SimpleNamespace(plan_id=1, thread_id=thread_id)
 
-    async def fake_get_chat_attachments_by_ids(db, *, plan_id, thread_id, attachment_ids):
-        _ = db, plan_id, thread_id, attachment_ids
+    async def fake_get_chat_attachments_by_ids(db, *, plan_id, thread_id, attachment_ids, user_id=None):
+        _ = db, plan_id, thread_id, attachment_ids, user_id
         return [
             _make_attachment(
                 attachment_id=8,
@@ -151,10 +153,14 @@ def test_chat_stream_passes_video_attachments_to_agent_runtime(monkeypatch, tmp_
         async def override_agent_runtime():
             return FakeAgentRuntime()
 
+        async def override_current_user():
+            return SimpleNamespace(id=1)
+
         from app.core.agent import get_agent_runtime
 
         app.dependency_overrides[get_db] = override_db
         app.dependency_overrides[get_agent_runtime] = override_agent_runtime
+        app.dependency_overrides[get_current_user] = override_current_user
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:

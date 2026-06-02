@@ -13,11 +13,12 @@ from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_public_api_base_url, get_storage_download_mode
+from app.core.auth import get_current_user_from_auth_or_query, get_current_user_from_token
 from app.core.file_ingestion import FileIngestionRuntime, get_file_ingestion_runtime
 from app.core.rag import RagRuntime, get_rag_runtime, supports_knowledge_file_extension
 from app.core.speech import SpeechRuntime, get_speech_runtime
@@ -25,6 +26,7 @@ from app.core.storage import get_storage_service
 from app.dependencies.db import get_db
 from app.models.file import ArtifactFile as ArtifactFileModel
 from app.models.file import KnowledgeFile as KnowledgeFileModel
+from app.models.user import User
 from app.schemas.file import (
     ArtifactFileListResponse,
     AttachmentFileResponse,
@@ -62,7 +64,23 @@ def _build_public_url(request: Request, route_name: str, **path_params: object) 
     return urlunsplit((urlsplit(public_base_url).scheme, urlsplit(public_base_url).netloc, parts.path, parts.query, ""))
 
 
+def _append_access_token(url: str, access_token: str | None) -> str:
+    if not access_token:
+        return url
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}access_token={access_token}"
+
+
+def _request_access_token(request: Request) -> str | None:
+    authorization = request.headers.get("authorization") or request.headers.get("Authorization")
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization.split(" ", 1)[1].strip()
+    token = request.query_params.get("access_token")
+    return token.strip() if token else None
+
+
 def _serialize_artifact(record: ArtifactFileModel, request: Request) -> dict[str, object]:
+    access_token = _request_access_token(request)
     download_url = _build_public_url(
         request,
         "download_file_resource",
@@ -82,8 +100,8 @@ def _serialize_artifact(record: ArtifactFileModel, request: Request) -> dict[str
         )
     return artifact_service.serialize_artifact(
         record,
-        url=download_url if record.status == artifact_service.ARTIFACT_STATUS_READY else None,
-        preview_url=preview_url,
+        url=_append_access_token(download_url, access_token) if record.status == artifact_service.ARTIFACT_STATUS_READY else None,
+        preview_url=_append_access_token(preview_url, access_token) if preview_url else None,
     )
 
 
@@ -92,17 +110,19 @@ async def _get_file_record(
     *,
     file_kind: FileKind,
     file_id: int,
+    user_id: int,
 ) -> KnowledgeFileModel | ArtifactFileModel | None:
     if file_kind == "knowledge":
-        return await file_service.get_file_by_id(db, file_id)
-    return await artifact_service.get_artifact_by_id(db, file_id)
+        return await file_service.get_file_by_id(db, file_id, user_id=user_id)
+    return await artifact_service.get_artifact_by_id(db, file_id, user_id=user_id)
 
 
 async def _require_ready_html_artifact(
     db: AsyncSession,
     file_id: int,
+    user_id: int,
 ) -> ArtifactFileModel:
-    artifact = await artifact_service.get_artifact_by_id(db, file_id)
+    artifact = await artifact_service.get_artifact_by_id(db, file_id, user_id=user_id)
     if artifact is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -137,8 +157,9 @@ async def _require_ready_html_artifact(
 async def _require_existing_knowledge_file(
     db: AsyncSession,
     file_id: int,
+    user_id: int,
 ) -> KnowledgeFileModel:
-    file_record = await file_service.get_file_by_id(db, file_id)
+    file_record = await file_service.get_file_by_id(db, file_id, user_id=user_id)
     if file_record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -244,9 +265,10 @@ async def _save_onlyoffice_file(
     file_kind: FileKind,
     file_id: int,
     file_url: str,
+    user_id: int,
     ingestion_runtime: FileIngestionRuntime,
 ) -> None:
-    file_record = await _get_file_record(db, file_kind=file_kind, file_id=file_id)
+    file_record = await _get_file_record(db, file_kind=file_kind, file_id=file_id, user_id=user_id)
     if file_record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -313,9 +335,10 @@ async def _save_onlyoffice_file(
 @router.get("/file/knowledgeFile", response_model=KnowledgeFileListResponse)
 async def list_knowledge_files(
     plan_id: int,
+    current_user: User = Depends(get_current_user_from_auth_or_query),
     db: AsyncSession = Depends(get_db),
 ) -> KnowledgeFileListResponse:
-    files = await file_service.list_files_by_plan(db, plan_id)
+    files = await file_service.list_files_by_plan(db, plan_id, user_id=current_user.id)
     return success_response(data=files, response_model=KnowledgeFileListResponse)
 
 
@@ -324,6 +347,7 @@ async def list_artifacts(
     thread_id: str,
     request: Request,
     include_history: bool = False,
+    current_user: User = Depends(get_current_user_from_auth_or_query),
     db: AsyncSession = Depends(get_db),
 ) -> ArtifactFileListResponse:
     if include_history:
@@ -331,11 +355,13 @@ async def list_artifacts(
             db,
             thread_id=thread_id,
             include_history=True,
+            user_id=current_user.id,
         )
     else:
         artifacts = await artifact_service.list_artifacts_by_thread(
             db,
             thread_id=thread_id,
+            user_id=current_user.id,
         )
     payload = [_serialize_artifact(record, request) for record in artifacts]
     return success_response(data=payload, response_model=ArtifactFileListResponse)
@@ -345,6 +371,7 @@ async def list_artifacts(
 async def upload_knowledge_file(
     plan_id: int,
     file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user_from_auth_or_query),
     db: AsyncSession = Depends(get_db),
     ingestion_runtime: FileIngestionRuntime = Depends(get_file_ingestion_runtime),
 ) -> KnowledgeFileResponse:
@@ -352,6 +379,7 @@ async def upload_knowledge_file(
         db,
         plan_id=plan_id,
         upload_file=file,
+        user_id=current_user.id,
     )
     if file_record.status == file_service.FILE_STATUS_UPLOADED:
         await ingestion_runtime.enqueue(file_record.id)
@@ -363,6 +391,7 @@ async def upload_attachment_file(
     plan_id: int,
     thread_id: str,
     file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user_from_auth_or_query),
     db: AsyncSession = Depends(get_db),
 ) -> AttachmentFileResponse:
     attachment_record = await file_service.create_attachment_from_upload(
@@ -370,6 +399,7 @@ async def upload_attachment_file(
         plan_id=plan_id,
         thread_id=thread_id,
         upload_file=file,
+        user_id=current_user.id,
     )
     return success_response(
         data=attachment_record,
@@ -382,6 +412,7 @@ async def transcribe_voice_attachment(
     plan_id: int,
     thread_id: str,
     file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user_from_auth_or_query),
     db: AsyncSession = Depends(get_db),
     speech_runtime: SpeechRuntime = Depends(get_speech_runtime),
 ) -> VoiceTranscriptionResponse:
@@ -390,6 +421,7 @@ async def transcribe_voice_attachment(
         plan_id=plan_id,
         thread_id=thread_id,
         upload_file=file,
+        user_id=current_user.id,
     )
     try:
         with file_service.materialize_attachment_file(attachment_record) as voice_path:
@@ -417,10 +449,11 @@ async def transcribe_voice_attachment(
 @router.post("/file/{file_id}/retry", response_model=KnowledgeFileResponse)
 async def retry_file_ingestion(
     file_id: int,
+    current_user: User = Depends(get_current_user_from_auth_or_query),
     db: AsyncSession = Depends(get_db),
     ingestion_runtime: FileIngestionRuntime = Depends(get_file_ingestion_runtime),
 ) -> KnowledgeFileResponse:
-    file_record = await file_service.retry_file(db, file_id)
+    file_record = await file_service.retry_file(db, file_id, user_id=current_user.id)
     await ingestion_runtime.enqueue(file_record.id)
     return success_response(data=file_record, response_model=KnowledgeFileResponse)
 
@@ -428,10 +461,11 @@ async def retry_file_ingestion(
 @router.delete("/file/{file_id}")
 async def delete_file(
     file_id: int,
+    current_user: User = Depends(get_current_user_from_auth_or_query),
     db: AsyncSession = Depends(get_db),
     rag_runtime: RagRuntime = Depends(get_rag_runtime),
 ):
-    await file_service.delete_file(db, file_id=file_id, rag_runtime=rag_runtime)
+    await file_service.delete_file(db, file_id=file_id, user_id=current_user.id, rag_runtime=rag_runtime)
     return success_response()
 
 
@@ -439,9 +473,10 @@ async def delete_file(
 async def download_file_resource(
     file_kind: FileKind,
     file_id: int,
+    current_user: User = Depends(get_current_user_from_auth_or_query),
     db: AsyncSession = Depends(get_db),
 ):
-    file_record = await _get_file_record(db, file_kind=file_kind, file_id=file_id)
+    file_record = await _get_file_record(db, file_kind=file_kind, file_id=file_id, user_id=current_user.id)
     if file_record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -513,9 +548,10 @@ async def download_file_resource(
 @router.get("/file/content/artifact/{file_id}", name="artifact_html_content")
 async def get_artifact_html_content(
     file_id: int,
+    current_user: User = Depends(get_current_user_from_auth_or_query),
     db: AsyncSession = Depends(get_db),
 ):
-    artifact = await _require_ready_html_artifact(db, file_id)
+    artifact = await _require_ready_html_artifact(db, file_id, current_user.id)
     try:
         content = get_storage_service().read_bytes(
             storage_backend=artifact.storage_backend,
@@ -535,12 +571,14 @@ async def get_artifact_html_content(
 async def preview_artifact_html(
     file_id: int,
     request: Request,
+    current_user: User = Depends(get_current_user_from_auth_or_query),
     db: AsyncSession = Depends(get_db),
 ):
-    artifact = await _require_ready_html_artifact(db, file_id)
+    artifact = await _require_ready_html_artifact(db, file_id, current_user.id)
     content_url = request.url_for("artifact_html_content", file_id=file_id)
+    content_url = _append_access_token(str(content_url), _request_access_token(request))
     title = escape(artifact.title or artifact.original_name or "HTML artifact preview")
-    iframe_src = escape(str(content_url), quote=True)
+    iframe_src = escape(content_url, quote=True)
 
     return HTMLResponse(
         content=f"""<!doctype html>
@@ -588,9 +626,10 @@ async def preview_artifact_html(
 @router.get("/file/content/{file_id}", name="get_file_content")
 async def get_file_content(
     file_id: int,
+    current_user: User = Depends(get_current_user_from_auth_or_query),
     db: AsyncSession = Depends(get_db),
 ):
-    return await download_file_resource("knowledge", file_id, db)
+    return await download_file_resource("knowledge", file_id, current_user, db)
 
 
 @router.get("/file/config/{file_kind}/{file_id}")
@@ -598,9 +637,10 @@ async def get_file_config(
     file_kind: FileKind,
     file_id: int,
     request: Request,
+    current_user: User = Depends(get_current_user_from_auth_or_query),
     db: AsyncSession = Depends(get_db),
 ):
-    file_record = await _get_file_record(db, file_kind=file_kind, file_id=file_id)
+    file_record = await _get_file_record(db, file_kind=file_kind, file_id=file_id, user_id=current_user.id)
     if file_record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -620,7 +660,9 @@ async def get_file_config(
         file_kind=file_kind,
         file_id=file_id,
     )
-    callback_url = _build_public_url(request, "handle_callback")
+    access_token = _request_access_token(request)
+    file_url = _append_access_token(file_url, access_token)
+    callback_url = _append_access_token(_build_public_url(request, "handle_callback"), access_token)
     key_timestamp = int(file_record.updated_at.timestamp()) if file_record.updated_at else 0
     document_title = getattr(file_record, "original_name", None) or Path(file_record.storage_path).name
 
@@ -644,14 +686,16 @@ async def get_file_config(
 async def get_legacy_file_config(
     file_id: int,
     request: Request,
+    current_user: User = Depends(get_current_user_from_auth_or_query),
     db: AsyncSession = Depends(get_db),
 ):
-    return await get_file_config("knowledge", file_id, request, db)
+    return await get_file_config("knowledge", file_id, request, current_user, db)
 
 
 @router.post("/file/callback", name="handle_callback")
 async def handle_callback(
     request: Request,
+    access_token: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     ingestion_runtime: FileIngestionRuntime = Depends(get_file_ingestion_runtime),
 ):
@@ -676,11 +720,16 @@ async def handle_callback(
             return {"error": 1}
 
         file_kind, file_id = _parse_onlyoffice_key(document_key)
+        if not access_token:
+            logger.warning("ONLYOFFICE callback is missing access token.", extra={"key": document_key})
+            return {"error": 1}
+        current_user = await get_current_user_from_token(db, access_token)
         await _save_onlyoffice_file(
             db=db,
             file_kind=file_kind,
             file_id=file_id,
             file_url=file_url,
+            user_id=current_user.id,
             ingestion_runtime=ingestion_runtime,
         )
     except Exception:

@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.api.chat import router as chat_router
 from app.api.file import router as file_router
+from app.core.auth import get_current_user, get_current_user_from_auth_or_query
 from app.core.speech import TranscriptionResult, get_speech_client_config, get_speech_runtime
 from app.dependencies.db import get_db
 from app.models.file import AttachmentFile
@@ -74,6 +75,7 @@ def test_voice_attachment_upload_accepts_audio_and_regular_attachment_rejects_it
             plan_id=1,
             thread_id="thread-1",
             upload_file=voice_upload,
+            user_id=1,
         )
         assert voice_attachment.extension == ".webm"
         assert file_service.is_voice_attachment_extension(voice_attachment.extension)
@@ -97,6 +99,7 @@ def test_voice_attachment_upload_accepts_audio_and_regular_attachment_rejects_it
                 plan_id=1,
                 thread_id="thread-1",
                 upload_file=invalid_upload,
+                user_id=1,
             )
         except HTTPException as exc:
             assert exc.status_code == 400
@@ -113,8 +116,8 @@ def test_voice_transcription_api_returns_attachment_and_transcript(monkeypatch) 
             _ = file_path, filename, mime_type
             return TranscriptionResult(text="老师您好", language="zh")
 
-    async def fake_create_voice_attachment_from_upload(db, *, plan_id, thread_id, upload_file):
-        _ = db, upload_file
+    async def fake_create_voice_attachment_from_upload(db, *, plan_id, thread_id, upload_file, user_id):
+        _ = db, upload_file, user_id
         now = datetime.now(timezone.utc)
         return AttachmentFile(
             id=9,
@@ -145,6 +148,7 @@ def test_voice_transcription_api_returns_attachment_and_transcript(monkeypatch) 
 
         app.dependency_overrides[get_db] = override_db
         app.dependency_overrides[get_speech_runtime] = override_speech_runtime
+        app.dependency_overrides[get_current_user_from_auth_or_query] = lambda: SimpleNamespace(id=1)
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -168,8 +172,8 @@ def test_voice_transcription_api_surfaces_provider_error(monkeypatch) -> None:
             _ = file_path, filename, mime_type
             raise RuntimeError("Current speech provider does not support transcription.")
 
-    async def fake_create_voice_attachment_from_upload(db, *, plan_id, thread_id, upload_file):
-        _ = db, upload_file
+    async def fake_create_voice_attachment_from_upload(db, *, plan_id, thread_id, upload_file, user_id):
+        _ = db, upload_file, user_id
         now = datetime.now(timezone.utc)
         return AttachmentFile(
             id=10,
@@ -200,6 +204,7 @@ def test_voice_transcription_api_surfaces_provider_error(monkeypatch) -> None:
 
         app.dependency_overrides[get_db] = override_db
         app.dependency_overrides[get_speech_runtime] = override_speech_runtime
+        app.dependency_overrides[get_current_user_from_auth_or_query] = lambda: SimpleNamespace(id=1)
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -221,12 +226,12 @@ def test_chat_stream_rejects_voice_attachments(monkeypatch) -> None:
             if False:
                 yield None
 
-    async def fake_get_session_by_thread_id(db, thread_id):
-        _ = db
+    async def fake_get_session_by_thread_id(db, thread_id, *, user_id=None):
+        _ = db, user_id
         return SimpleNamespace(plan_id=1, thread_id=thread_id)
 
-    async def fake_get_chat_attachments_by_ids(db, *, plan_id, thread_id, attachment_ids):
-        _ = db, plan_id, thread_id, attachment_ids
+    async def fake_get_chat_attachments_by_ids(db, *, plan_id, thread_id, attachment_ids, user_id=None):
+        _ = db, plan_id, thread_id, attachment_ids, user_id
         raise HTTPException(status_code=400, detail="voice attachment")
 
     async def run() -> None:
@@ -246,6 +251,7 @@ def test_chat_stream_rejects_voice_attachments(monkeypatch) -> None:
 
         app.dependency_overrides[get_db] = override_db
         app.dependency_overrides[get_agent_runtime] = override_agent_runtime
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1)
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:

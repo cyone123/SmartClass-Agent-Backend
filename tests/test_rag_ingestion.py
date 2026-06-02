@@ -132,8 +132,8 @@ def test_process_file_ingestion_supports_docx_files(tmp_path: Path, monkeypatch)
             indexed_at=None,
         )
 
-        async def fake_get_file_by_id(db, file_id, *, include_deleted=False):
-            _ = db, include_deleted
+        async def fake_get_file_by_id(db, file_id, *, include_deleted=False, user_id=None):
+            _ = db, include_deleted, user_id
             if file_id == knowledge_file.id:
                 return knowledge_file
             return None
@@ -146,6 +146,7 @@ def test_process_file_ingestion_supports_docx_files(tmp_path: Path, monkeypatch)
             db,
             file_id=knowledge_file.id,
             rag_runtime=rag_runtime,
+            user_id=7,
         )
 
         assert rag_runtime.deleted_file_ids == [knowledge_file.id]
@@ -175,12 +176,12 @@ def test_create_knowledge_file_from_upload_uses_storage_service(
         monkeypatch.setenv("FILE_STORAGE_ROOT", str(tmp_path / "objects"))
         reset_storage_service_for_tests()
 
-        async def fake_ensure_plan_exists(db, plan_id):
-            _ = db, plan_id
+        async def fake_ensure_plan_exists(db, plan_id, *, user_id=None):
+            _ = db, plan_id, user_id
             return object()
 
-        async def fake_get_existing_file_by_hash(db, *, plan_id, sha256):
-            _ = db, plan_id, sha256
+        async def fake_get_existing_file_by_hash(db, *, plan_id, sha256, user_id):
+            _ = db, plan_id, sha256, user_id
             return None
 
         monkeypatch.setattr(file_service, "ensure_plan_exists", fake_ensure_plan_exists)
@@ -196,10 +197,11 @@ def test_create_knowledge_file_from_upload_uses_storage_service(
             db,
             plan_id=7,
             upload_file=upload,
+            user_id=7,
         )
 
         assert record.storage_backend == LOCAL_STORAGE_BACKEND
-        assert record.storage_key == "knowledge/plan-7/file-42/lesson.txt"
+        assert record.storage_key == "knowledge/user-7/plan-7/file-42/lesson.txt"
         assert record.storage_path
         assert Path(record.storage_path).read_bytes() == b"lesson knowledge"
         assert record.status == file_service.FILE_STATUS_UPLOADED
@@ -223,12 +225,12 @@ def test_process_file_ingestion_materializes_object_backed_knowledge_file(
             filename="lesson.txt",
         )
 
-        async def fake_ensure_plan_exists(db, plan_id):
-            _ = db, plan_id
+        async def fake_ensure_plan_exists(db, plan_id, *, user_id=None):
+            _ = db, plan_id, user_id
             return object()
 
-        async def fake_get_existing_file_by_hash(db, *, plan_id, sha256):
-            _ = db, plan_id, sha256
+        async def fake_get_existing_file_by_hash(db, *, plan_id, sha256, user_id):
+            _ = db, plan_id, sha256, user_id
             return None
 
         monkeypatch.setattr(file_service, "ensure_plan_exists", fake_ensure_plan_exists)
@@ -239,10 +241,11 @@ def test_process_file_ingestion_materializes_object_backed_knowledge_file(
             db,
             plan_id=7,
             upload_file=upload,
+            user_id=7,
         )
 
-        async def fake_get_file_by_id(db, file_id, *, include_deleted=False):
-            _ = db, include_deleted
+        async def fake_get_file_by_id(db, file_id, *, include_deleted=False, user_id=None):
+            _ = db, include_deleted, user_id
             if file_id == knowledge_file.id:
                 return knowledge_file
             return None
@@ -254,6 +257,7 @@ def test_process_file_ingestion_materializes_object_backed_knowledge_file(
             db,
             file_id=knowledge_file.id,
             rag_runtime=rag_runtime,
+            user_id=7,
         )
 
         assert rag_runtime.deleted_file_ids == [knowledge_file.id]

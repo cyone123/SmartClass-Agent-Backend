@@ -61,11 +61,13 @@ def _build_storage_path(plan_id: int, file_id: int, original_name: str) -> tuple
 def _build_knowledge_storage_key(
     *,
     plan_id: int,
+    user_id: int,
     file_id: int,
     stored_name: str,
 ) -> str:
     return build_storage_key(
         "knowledge",
+        f"user-{user_id}",
         f"plan-{plan_id}",
         f"file-{file_id}",
         stored_name,
@@ -89,12 +91,14 @@ def _build_attachment_storage_path(
 def _build_attachment_storage_key(
     *,
     plan_id: int,
+    user_id: int,
     thread_id: str,
     attachment_id: int,
     stored_name: str,
 ) -> str:
     return build_storage_key(
         "attachments",
+        f"user-{user_id}",
         f"plan-{plan_id}",
         f"thread-{thread_id}",
         f"attachment-{attachment_id}",
@@ -170,8 +174,18 @@ async def _read_and_validate_upload_file(
     return original_name, extension, content, size_bytes, sha256, mime_type
 
 
-async def ensure_plan_exists(db: AsyncSession, plan_id: int) -> Plan:
-    plan = await db.get(Plan, plan_id)
+async def ensure_plan_exists(
+    db: AsyncSession,
+    plan_id: int,
+    *,
+    user_id: int | None = None,
+) -> Plan:
+    if user_id is None:
+        plan = await db.get(Plan, plan_id)
+    else:
+        stmt = select(Plan).where(Plan.id == plan_id, Plan.user_id == user_id)
+        result = await db.execute(stmt)
+        plan = result.scalar_one_or_none()
     if plan is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -184,8 +198,12 @@ async def ensure_thread_belongs_to_plan(
     db: AsyncSession,
     plan_id: int,
     thread_id: str,
+    *,
+    user_id: int | None = None,
 ) -> Session:
     stmt = select(Session).where(Session.thread_id == thread_id)
+    if user_id is not None:
+        stmt = stmt.where(Session.user_id == user_id)
     result = await db.execute(stmt)
     session_record = result.scalar_one_or_none()
     if session_record is None:
@@ -205,9 +223,15 @@ async def get_file_by_id(
     db: AsyncSession,
     file_id: int,
     *,
+    user_id: int | None = None,
     include_deleted: bool = False,
 ) -> KnowledgeFile | None:
-    file_record = await db.get(KnowledgeFile, file_id)
+    if user_id is None:
+        file_record = await db.get(KnowledgeFile, file_id)
+    else:
+        stmt = select(KnowledgeFile).where(KnowledgeFile.id == file_id, KnowledgeFile.user_id == user_id)
+        result = await db.execute(stmt)
+        file_record = result.scalar_one_or_none()
     if file_record is None:
         return None
     if not include_deleted and file_record.status == FILE_STATUS_DELETED:
@@ -215,11 +239,13 @@ async def get_file_by_id(
     return file_record
 
 
-async def list_files_by_plan(db: AsyncSession, plan_id: int) -> list[KnowledgeFile]:
+async def list_files_by_plan(db: AsyncSession, plan_id: int, *, user_id: int) -> list[KnowledgeFile]:
+    await ensure_plan_exists(db, plan_id, user_id=user_id)
     stmt = (
         select(KnowledgeFile)
         .where(
             KnowledgeFile.plan_id == plan_id,
+            KnowledgeFile.user_id == user_id,
             KnowledgeFile.status != FILE_STATUS_DELETED,
         )
         .order_by(KnowledgeFile.id.desc())
@@ -233,11 +259,13 @@ async def get_existing_file_by_hash(
     *,
     plan_id: int,
     sha256: str,
+    user_id: int,
 ) -> KnowledgeFile | None:
     stmt = (
         select(KnowledgeFile)
         .where(
             KnowledgeFile.plan_id == plan_id,
+            KnowledgeFile.user_id == user_id,
             KnowledgeFile.sha256 == sha256,
             KnowledgeFile.status.in_(ACTIVE_FILE_STATUSES),
         )
@@ -253,11 +281,13 @@ async def get_existing_attachment_by_hash(
     plan_id: int,
     thread_id: str,
     sha256: str,
+    user_id: int,
 ) -> AttachmentFile | None:
     stmt = (
         select(AttachmentFile)
         .where(
             AttachmentFile.plan_id == plan_id,
+            AttachmentFile.user_id == user_id,
             AttachmentFile.thread_id == thread_id,
             AttachmentFile.sha256 == sha256,
         )
@@ -272,8 +302,9 @@ async def create_file_from_upload(
     *,
     plan_id: int,
     upload_file: UploadFile,
+    user_id: int,
 ) -> KnowledgeFile:
-    await ensure_plan_exists(db, plan_id)
+    await ensure_plan_exists(db, plan_id, user_id=user_id)
     original_name, extension, content, size_bytes, sha256, mime_type = (
         await _read_and_validate_upload_file(
             upload_file,
@@ -281,12 +312,13 @@ async def create_file_from_upload(
         )
     )
 
-    existing = await get_existing_file_by_hash(db, plan_id=plan_id, sha256=sha256)
+    existing = await get_existing_file_by_hash(db, plan_id=plan_id, sha256=sha256, user_id=user_id)
     if existing is not None:
         return existing
 
     file_record = KnowledgeFile(
         plan_id=plan_id,
+        user_id=user_id,
         original_name=original_name,
         stored_name="",
         extension=extension,
@@ -304,6 +336,7 @@ async def create_file_from_upload(
     stored_name, storage_path = _build_storage_path(plan_id, file_record.id, original_name)
     storage_key = _build_knowledge_storage_key(
         plan_id=plan_id,
+        user_id=user_id,
         file_id=file_record.id,
         stored_name=stored_name,
     )
@@ -332,9 +365,10 @@ async def create_attachment_from_upload(
     plan_id: int,
     thread_id: str,
     upload_file: UploadFile,
+    user_id: int,
 ) -> AttachmentFile:
-    await ensure_plan_exists(db, plan_id)
-    await ensure_thread_belongs_to_plan(db, plan_id, thread_id)
+    await ensure_plan_exists(db, plan_id, user_id=user_id)
+    await ensure_thread_belongs_to_plan(db, plan_id, thread_id, user_id=user_id)
     original_name, extension, content, size_bytes, sha256, mime_type = (
         await _read_and_validate_upload_file(
             upload_file,
@@ -347,12 +381,14 @@ async def create_attachment_from_upload(
         plan_id=plan_id,
         thread_id=thread_id,
         sha256=sha256,
+        user_id=user_id,
     )
     if existing is not None:
         return existing
 
     attachment_record = AttachmentFile(
         plan_id=plan_id,
+        user_id=user_id,
         thread_id=thread_id,
         original_name=original_name,
         stored_name="",
@@ -373,6 +409,7 @@ async def create_attachment_from_upload(
     )
     storage_key = _build_attachment_storage_key(
         plan_id=plan_id,
+        user_id=user_id,
         thread_id=thread_id,
         attachment_id=attachment_record.id,
         stored_name=stored_name,
@@ -402,9 +439,10 @@ async def create_voice_attachment_from_upload(
     plan_id: int,
     thread_id: str,
     upload_file: UploadFile,
+    user_id: int,
 ) -> AttachmentFile:
-    await ensure_plan_exists(db, plan_id)
-    await ensure_thread_belongs_to_plan(db, plan_id, thread_id)
+    await ensure_plan_exists(db, plan_id, user_id=user_id)
+    await ensure_thread_belongs_to_plan(db, plan_id, thread_id, user_id=user_id)
     original_name, extension, content, size_bytes, sha256, mime_type = (
         await _read_and_validate_upload_file(
             upload_file,
@@ -417,12 +455,14 @@ async def create_voice_attachment_from_upload(
         plan_id=plan_id,
         thread_id=thread_id,
         sha256=sha256,
+        user_id=user_id,
     )
     if existing is not None and is_voice_attachment_extension(existing.extension):
         return existing
 
     attachment_record = AttachmentFile(
         plan_id=plan_id,
+        user_id=user_id,
         thread_id=thread_id,
         original_name=original_name,
         stored_name="",
@@ -443,6 +483,7 @@ async def create_voice_attachment_from_upload(
     )
     storage_key = _build_attachment_storage_key(
         plan_id=plan_id,
+        user_id=user_id,
         thread_id=thread_id,
         attachment_id=attachment_record.id,
         stored_name=stored_name,
@@ -472,6 +513,7 @@ async def get_attachments_by_ids(
     plan_id: int,
     thread_id: str,
     attachment_ids: list[int],
+    user_id: int | None = None,
 ) -> list[AttachmentFile]:
     if not attachment_ids:
         return []
@@ -482,6 +524,8 @@ async def get_attachments_by_ids(
         AttachmentFile.thread_id == thread_id,
         AttachmentFile.id.in_(unique_ids),
     )
+    if user_id is not None:
+        stmt = stmt.where(AttachmentFile.user_id == user_id)
     result = await db.execute(stmt)
     attachments = list(result.scalars().all())
     attachment_by_id = {attachment.id: attachment for attachment in attachments}
@@ -506,12 +550,14 @@ async def get_attachment_storage_paths_by_ids(
     plan_id: int,
     thread_id: str,
     attachment_ids: list[int],
+    user_id: int | None = None,
 ) -> list[str]:
     attachments = await get_chat_attachments_by_ids(
         db,
         plan_id=plan_id,
         thread_id=thread_id,
         attachment_ids=attachment_ids,
+        user_id=user_id,
     )
     # Legacy compatibility helper: callers that still expect storage paths should
     # continue to receive the record field, while new analysis paths use the
@@ -525,12 +571,14 @@ async def get_chat_attachments_by_ids(
     plan_id: int,
     thread_id: str,
     attachment_ids: list[int],
+    user_id: int | None = None,
 ) -> list[AttachmentFile]:
     attachments = await get_attachments_by_ids(
         db,
         plan_id=plan_id,
         thread_id=thread_id,
         attachment_ids=attachment_ids,
+        user_id=user_id,
     )
     for attachment in attachments:
         if is_voice_attachment_record(attachment):
@@ -640,8 +688,8 @@ async def mark_file_failed(
     return file_record
 
 
-async def retry_file(db: AsyncSession, file_id: int) -> KnowledgeFile:
-    file_record = await get_file_by_id(db, file_id, include_deleted=True)
+async def retry_file(db: AsyncSession, file_id: int, *, user_id: int) -> KnowledgeFile:
+    file_record = await get_file_by_id(db, file_id, user_id=user_id, include_deleted=True)
     if file_record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -672,9 +720,10 @@ async def delete_file(
     db: AsyncSession,
     *,
     file_id: int,
+    user_id: int,
     rag_runtime: RagRuntime,
 ) -> None:
-    file_record = await get_file_by_id(db, file_id, include_deleted=True)
+    file_record = await get_file_by_id(db, file_id, user_id=user_id, include_deleted=True)
     if file_record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -715,9 +764,10 @@ async def process_file_ingestion(
     db: AsyncSession,
     *,
     file_id: int,
+    user_id: int | None = None,
     rag_runtime: RagRuntime,
 ) -> None:
-    file_record = await get_file_by_id(db, file_id, include_deleted=True)
+    file_record = await get_file_by_id(db, file_id, user_id=user_id, include_deleted=True)
     if file_record is None or file_record.status == FILE_STATUS_DELETED:
         return
 

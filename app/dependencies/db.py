@@ -185,6 +185,94 @@ async def init_db() -> None:
         await conn.execute(
             text(
                 """
+                ALTER TABLE IF EXISTS teaching_plans
+                ADD COLUMN IF NOT EXISTS user_id INTEGER NULL
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS teaching_sessions
+                ADD COLUMN IF NOT EXISTS user_id INTEGER NULL
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS knowledge_files
+                ADD COLUMN IF NOT EXISTS user_id INTEGER NULL
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS attachment_files
+                ADD COLUMN IF NOT EXISTS user_id INTEGER NULL
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS artifact_files
+                ADD COLUMN IF NOT EXISTS user_id INTEGER NULL
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_users_username
+                ON users (username)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_teaching_plans_user_id
+                ON teaching_plans (user_id)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_teaching_sessions_user_id
+                ON teaching_sessions (user_id)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_knowledge_files_user_id
+                ON knowledge_files (user_id)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_attachment_files_user_id
+                ON attachment_files (user_id)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_artifact_files_user_id
+                ON artifact_files (user_id)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
                 CREATE INDEX IF NOT EXISTS ix_knowledge_files_storage_backend
                 ON knowledge_files (storage_backend)
                 """
@@ -198,6 +286,17 @@ async def init_db() -> None:
                 """
             )
         )
+
+    from app.services.auth_service import ensure_default_admin
+
+    async with AsyncSessionLocal() as session:
+        admin = await ensure_default_admin(session)
+        await session.execute(text("UPDATE teaching_plans SET user_id = :user_id WHERE user_id IS NULL"), {"user_id": admin.id})
+        await session.execute(text("UPDATE teaching_sessions SET user_id = :user_id WHERE user_id IS NULL"), {"user_id": admin.id})
+        await session.execute(text("UPDATE knowledge_files SET user_id = :user_id WHERE user_id IS NULL"), {"user_id": admin.id})
+        await session.execute(text("UPDATE attachment_files SET user_id = :user_id WHERE user_id IS NULL"), {"user_id": admin.id})
+        await session.execute(text("UPDATE artifact_files SET user_id = :user_id WHERE user_id IS NULL"), {"user_id": admin.id})
+        await session.commit()
 
 
 async def get_db():

@@ -4,8 +4,6 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.core.memory import DEFAULT_USER_ID
-
 
 class ApprovalActionRequest(BaseModel):
     action: Literal["approve"] = Field(..., description="Approval action")
@@ -19,10 +17,6 @@ class ApprovalActionRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: Optional[str] = Field(None, description="User input message")
     thread_id: Optional[str] = Field(None, description="Conversation thread id")
-    user_id: Optional[str] = Field(
-        DEFAULT_USER_ID,
-        description="Current account id for cross-session long-term memory",
-    )
     attachment_ids: Optional[list[int]] = Field(
         default=None,
         description="Attachment ids for the current message",

@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from app.api.chat import router as chat_router
 from app.core.agent import AgentRuntime, get_agent_runtime, get_thread_config
+from app.core.auth import get_current_user
 from app.dependencies.db import get_db
 
 
@@ -124,8 +125,12 @@ def test_chat_stream_forwards_artifact_trace_events() -> None:
         async def override_agent_runtime():
             return FakeAgentRuntime()
 
+        async def override_current_user():
+            return type("User", (), {"id": 1})()
+
         app.dependency_overrides[get_db] = override_db
         app.dependency_overrides[get_agent_runtime] = override_agent_runtime
+        app.dependency_overrides[get_current_user] = override_current_user
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:

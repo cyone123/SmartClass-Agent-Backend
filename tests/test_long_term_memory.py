@@ -194,6 +194,6 @@ def test_route_decision_targets_memory_retrieval_nodes() -> None:
     assert route_decision({"intent": "artifact_revision"}) == "artifact_revision_memory_retrieval_node"
 
 
-def test_chat_request_defaults_user_id() -> None:
-    payload = ChatRequest.model_validate({"message": "hello"})
-    assert payload.user_id == DEFAULT_USER_ID
+def test_chat_request_ignores_client_supplied_user_id() -> None:
+    payload = ChatRequest.model_validate({"message": "hello", "user_id": "spoofed-user"})
+    assert not hasattr(payload, "user_id")

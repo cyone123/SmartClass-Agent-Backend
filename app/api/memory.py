@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.core.agent import AgentRuntime, get_agent_runtime
+from app.core.auth import get_current_user
 from app.core.memory import (
-    DEFAULT_USER_ID,
     delete_memory_item,
     experience_namespace,
     normalize_user_id,
@@ -12,6 +12,7 @@ from app.core.memory import (
     put_memory_item,
     search_memory_items,
 )
+from app.models.user import User
 from app.schemas.memory import (
     MemoryItem,
     MemoryItemResponse,
@@ -52,11 +53,11 @@ def _serialize_memory(raw: dict, *, kind: MemoryKind) -> MemoryItem:
 @router.get("/memory", response_model=MemoryListResponse)
 async def list_memories(
     kind: MemoryKind | None = Query(default=None),
-    user_id: str = Query(default=DEFAULT_USER_ID),
     query: str | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
     agent_runtime: AgentRuntime = Depends(get_agent_runtime),
 ) -> MemoryListResponse:
-    normalized_user_id = normalize_user_id(user_id)
+    normalized_user_id = normalize_user_id(str(current_user.id))
     kinds: list[MemoryKind] = [kind] if kind is not None else ["profile", "experience"]
     items: list[MemoryItem] = []
     for memory_kind in kinds:
@@ -85,9 +86,10 @@ async def list_memories(
 @router.post("/memory", response_model=MemoryItemResponse)
 async def create_memory(
     payload: MemoryWriteRequest,
+    current_user: User = Depends(get_current_user),
     agent_runtime: AgentRuntime = Depends(get_agent_runtime),
 ) -> MemoryItemResponse:
-    user_id = normalize_user_id(payload.user_id)
+    user_id = normalize_user_id(str(current_user.id))
     value = {
         "kind": payload.kind,
         "title": payload.title.strip(),
@@ -116,9 +118,10 @@ async def update_memory(
     kind: MemoryKind,
     memory_id: str,
     payload: MemoryUpdateRequest,
+    current_user: User = Depends(get_current_user),
     agent_runtime: AgentRuntime = Depends(get_agent_runtime),
 ) -> MemoryItemResponse:
-    user_id = normalize_user_id(payload.user_id)
+    user_id = normalize_user_id(str(current_user.id))
     update: dict = {"kind": kind}
     if payload.title is not None:
         update["title"] = payload.title.strip()
@@ -147,12 +150,12 @@ async def update_memory(
 async def delete_memory(
     kind: MemoryKind,
     memory_id: str,
-    user_id: str = Query(default=DEFAULT_USER_ID),
+    current_user: User = Depends(get_current_user),
     agent_runtime: AgentRuntime = Depends(get_agent_runtime),
 ):
     await delete_memory_item(
         agent_runtime.memory_store,
-        _namespace_for_kind(normalize_user_id(user_id), kind),
+        _namespace_for_kind(normalize_user_id(str(current_user.id)), kind),
         memory_id,
     )
     return success_response(data={"deleted": True})

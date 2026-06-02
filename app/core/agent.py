@@ -125,6 +125,7 @@ def get_thread_config(
     thread_id: str | None,
     *,
     run_id: str | None = None,
+    user_id: str | None = None,
     progress_reporter: ProgressReporter | None = None,
     artifact_event_emitter: ArtifactEventEmitter | None = None,
     artifact_trace_event_emitter: ArtifactTraceEventEmitter | None = None,
@@ -134,6 +135,8 @@ def get_thread_config(
     }
     if run_id is not None:
         configurable["run_id"] = run_id
+    if user_id is not None:
+        configurable["user_id"] = user_id
     if progress_reporter is not None:
         configurable["progress_reporter"] = progress_reporter
     if artifact_event_emitter is not None:
@@ -874,6 +877,7 @@ class AgentRuntime:
         thread_id: str | None,
         *,
         plan_id: int | None,
+        user_id: str | None = None,
         attachment_text: str | None = None,
         attachment_paths: list[str] | None = None,
         approval: dict[str, Any] | None = None,
@@ -911,6 +915,7 @@ class AgentRuntime:
                 current_artifacts = await artifact_service.list_latest_ready_current_artifacts_by_thread(
                     db,
                     thread_id=thread_id,
+                    user_id=int(user_id) if user_id is not None else None,
                 )
             graph_input["artifact_catalog"] = [_artifact_catalog_entry(record) for record in current_artifacts]
 
@@ -1345,13 +1350,21 @@ class AgentRuntime:
 
         thread_id = str(_get_configurable_value(config, "thread_id") or "").strip()
         run_id = str(_get_configurable_value(config, "run_id") or "").strip()
+        user_id_raw = str(_get_configurable_value(config, "user_id") or "").strip()
         plan_id = state.get("plan_id")
         artifact_title = _artifact_display_name(artifact_type)
         emitter = _get_artifact_event_emitter(config)
         trace_event_emitter = _get_artifact_trace_event_emitter(config)
 
-        if not thread_id or not run_id or plan_id is None:
-            error_message = "Missing thread_id, run_id, or plan_id for artifact job."
+        if not thread_id or not run_id or not user_id_raw or plan_id is None:
+            error_message = "Missing thread_id, run_id, user_id, or plan_id for artifact job."
+            if isinstance(main_reporter, ProgressReporter):
+                main_reporter.emit(step_key, "failed", detail=error_message)
+            return {state_key: _failed_subagent_result(artifact_type, error=error_message)}
+        try:
+            user_id_int = int(user_id_raw)
+        except ValueError:
+            error_message = "Invalid user_id for artifact job."
             if isinstance(main_reporter, ProgressReporter):
                 main_reporter.emit(step_key, "failed", detail=error_message)
             return {state_key: _failed_subagent_result(artifact_type, error=error_message)}
@@ -1407,6 +1420,7 @@ class AgentRuntime:
                         thread_id=thread_id,
                         artifact_type=artifact_type,
                         run_id=sub_run_id,
+                        user_id=user_id_int,
                         title=artifact_title,
                     )
                 else:
@@ -1423,6 +1437,7 @@ class AgentRuntime:
                     source_record = await artifact_service.require_artifact_by_id(
                         db,
                         int(source_artifact["id"]),
+                        user_id=user_id_int,
                     )
                     artifact_record = await artifact_service.create_revision_artifact(
                         db,
@@ -1455,6 +1470,7 @@ class AgentRuntime:
             agent_config = get_thread_config(
                 self._artifact_agent_thread_id(thread_id, artifact_type),
                 run_id=sub_run_id,
+                user_id=user_id_raw,
             )
             if mode == "revise":
                 if isinstance(main_reporter, ProgressReporter):
@@ -1506,7 +1522,11 @@ class AgentRuntime:
                 )
 
             async with AsyncSessionLocal() as db:
-                refreshed_record = await artifact_service.require_artifact_by_id(db, artifact_record.id)
+                refreshed_record = await artifact_service.require_artifact_by_id(
+                    db,
+                    artifact_record.id,
+                    user_id=user_id_int,
+                )
                 refreshed_record = await artifact_service.mark_artifact_ready(
                     db,
                     refreshed_record,
@@ -1543,7 +1563,11 @@ class AgentRuntime:
             error_message = str(exc)
             if artifact_record is not None:
                 async with AsyncSessionLocal() as db:
-                    refreshed_record = await artifact_service.require_artifact_by_id(db, artifact_record.id)
+                    refreshed_record = await artifact_service.require_artifact_by_id(
+                        db,
+                        artifact_record.id,
+                        user_id=user_id_int,
+                    )
                     refreshed_record = await artifact_service.mark_artifact_failed(
                         db,
                         refreshed_record,

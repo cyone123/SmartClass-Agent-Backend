@@ -10,12 +10,19 @@ from app.models.base import Base
 
 if TYPE_CHECKING:
     from app.models.plan import Plan
+    from app.models.user import User
 
 
 class KnowledgeFile(Base):
     __tablename__ = "knowledge_files"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
     plan_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("teaching_plans.id"),
@@ -50,6 +57,7 @@ class KnowledgeFile(Base):
         nullable=True,
     )
 
+    user: Mapped[User] = relationship("User", back_populates="knowledge_files")
     plan: Mapped[Plan] = relationship("Plan", back_populates="files")
 
 
@@ -57,6 +65,12 @@ class AttachmentFile(Base):
     __tablename__ = "attachment_files"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
     plan_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("teaching_plans.id"),
@@ -85,6 +99,7 @@ class AttachmentFile(Base):
         nullable=False,
     )
 
+    user: Mapped[User] = relationship("User", back_populates="attachment_files")
     plan: Mapped[Plan] = relationship("Plan", back_populates="attachments")
 
 
@@ -92,6 +107,12 @@ class ArtifactFile(Base):
     __tablename__ = "artifact_files"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
     plan_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("teaching_plans.id"),
@@ -137,6 +158,7 @@ class ArtifactFile(Base):
         nullable=False,
     )
 
+    user: Mapped[User] = relationship("User", back_populates="artifact_files")
     plan: Mapped[Plan] = relationship("Plan", back_populates="artifacts")
     parent_artifact: Mapped["ArtifactFile | None"] = relationship(
         "ArtifactFile",

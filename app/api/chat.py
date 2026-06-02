@@ -6,8 +6,10 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import get_current_user
 from app.core.agent import AgentRuntime, get_agent_runtime
 from app.models.file import AttachmentFile
+from app.models.user import User
 from app.dependencies.db import get_db
 from app.schemas.chat import ChatRequest
 from app.services import file_service, session_service
@@ -35,6 +37,7 @@ def format_sse_json_event(payload: object, *, event: str) -> str:
 @router.post("/chat/stream")
 async def chat(
     message: ChatRequest,
+    current_user: User = Depends(get_current_user),
     agent_runtime: AgentRuntime = Depends(get_agent_runtime),
     db: AsyncSession = Depends(get_db),
 ):
@@ -55,9 +58,13 @@ async def chat(
     plan_id = None
     attachments: list[AttachmentFile] | None = None
     if thread_id:
-        session = await session_service.get_session_by_thread_id(db, thread_id)
-        if session is not None:
-            plan_id = session.plan_id
+        session = await session_service.get_session_by_thread_id(db, thread_id, user_id=current_user.id)
+        if session is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Thread {thread_id} not found.",
+            )
+        plan_id = session.plan_id
 
     if attachment_ids:
         if plan_id is None:
@@ -70,6 +77,7 @@ async def chat(
             plan_id=plan_id,
             thread_id=thread_id,
             attachment_ids=attachment_ids,
+            user_id=current_user.id,
         )
 
     if approval:
@@ -92,7 +100,7 @@ async def chat(
             message.message or "",
             thread_id,
             run_id=run_id,
-            user_id=message.user_id,
+            user_id=str(current_user.id),
             plan_id=plan_id,
             attachments=attachments,
             approval=approval,

@@ -4,12 +4,14 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.encoders import jsonable_encoder
 from httpx import ASGITransport, AsyncClient
 
 from app.api.file import router as file_router
+from app.core.auth import get_current_user_from_auth_or_query
 from app.core.storage import get_storage_service, reset_storage_service_for_tests
 from app.dependencies.db import get_db
 from app.models.file import ArtifactFile, KnowledgeFile
@@ -84,6 +86,7 @@ def test_artifact_service_creates_persists_and_lists_artifacts(
         return None
 
     async def run() -> None:
+        monkeypatch.setenv("STORAGE_BACKEND", "local")
         monkeypatch.setenv("FILE_STORAGE_ROOT", str(tmp_path))
         reset_storage_service_for_tests()
         monkeypatch.setattr(artifact_service, "ensure_plan_exists", _noop)
@@ -97,6 +100,7 @@ def test_artifact_service_creates_persists_and_lists_artifacts(
             artifact_type="html-game",
             run_id="run-1",
             title="quiz",
+            user_id=1,
         )
         assert running.status == artifact_service.ARTIFACT_STATUS_RUNNING
         assert "artifacts" in running.storage_path
@@ -127,6 +131,7 @@ def test_artifact_service_creates_persists_and_lists_artifacts(
             artifact_type="ppt",
             run_id="run-2",
             title="slides",
+            user_id=1,
         )
         failed = await artifact_service.mark_artifact_failed(
             db,
@@ -151,6 +156,7 @@ def test_artifact_service_creates_revision_versions_and_updates_current_flags(
         return None
 
     async def run() -> None:
+        monkeypatch.setenv("STORAGE_BACKEND", "local")
         monkeypatch.setenv("FILE_STORAGE_ROOT", str(tmp_path))
         reset_storage_service_for_tests()
         monkeypatch.setattr(artifact_service, "ensure_plan_exists", _noop)
@@ -164,6 +170,7 @@ def test_artifact_service_creates_revision_versions_and_updates_current_flags(
             artifact_type="html-game",
             run_id="run-base",
             title="quiz",
+            user_id=1,
         )
         generated_html = tmp_path / "generated.html"
         generated_html.write_text("<html>v1</html>", encoding="utf-8")
@@ -221,6 +228,7 @@ def test_artifact_service_lists_only_ready_current_artifacts_for_revision_catalo
         return None
 
     async def run() -> None:
+        monkeypatch.setenv("STORAGE_BACKEND", "local")
         monkeypatch.setenv("FILE_STORAGE_ROOT", str(tmp_path))
         reset_storage_service_for_tests()
         monkeypatch.setattr(artifact_service, "ensure_plan_exists", _noop)
@@ -234,6 +242,7 @@ def test_artifact_service_lists_only_ready_current_artifacts_for_revision_catalo
             artifact_type="ppt",
             run_id="run-ready",
             title="slides",
+            user_id=1,
         )
         ready_file = tmp_path / "slides.pptx"
         ready_file.write_text("ppt-ready", encoding="utf-8")
@@ -246,6 +255,7 @@ def test_artifact_service_lists_only_ready_current_artifacts_for_revision_catalo
             artifact_type="docx",
             run_id="run-running",
             title="lesson",
+            user_id=1,
         )
         failed = await artifact_service.create_running_artifact(
             db,
@@ -254,6 +264,7 @@ def test_artifact_service_lists_only_ready_current_artifacts_for_revision_catalo
             artifact_type="html-game",
             run_id="run-failed",
             title="game",
+            user_id=1,
         )
         failed = await artifact_service.mark_artifact_failed(
             db,
@@ -278,7 +289,9 @@ def test_file_api_supports_artifact_download_and_public_config(
     monkeypatch,
 ) -> None:
     async def run() -> None:
+        monkeypatch.setenv("STORAGE_BACKEND", "local")
         monkeypatch.setenv("PUBLIC_API_BASE_URL", "https://public.example.com")
+        current_user = SimpleNamespace(id=1)
 
         knowledge_path = tmp_path / "source.docx"
         knowledge_path.write_text("knowledge doc", encoding="utf-8")
@@ -346,20 +359,23 @@ def test_file_api_supports_artifact_download_and_public_config(
             updated_at=now,
         )
 
-        async def fake_get_file_by_id(db, file_id, *, include_deleted=False):
+        async def fake_get_file_by_id(db, file_id, *, include_deleted=False, user_id=None):
             _ = db, include_deleted
+            _ = user_id
             return knowledge if file_id == knowledge.id else None
 
-        async def fake_get_artifact_by_id(db, artifact_id):
+        async def fake_get_artifact_by_id(db, artifact_id, *, user_id=None):
             _ = db
+            _ = user_id
             if artifact_id == artifact_docx.id:
                 return artifact_docx
             if artifact_id == artifact_html.id:
                 return artifact_html
             return None
 
-        async def fake_list_artifacts_by_thread(db, *, thread_id):
+        async def fake_list_artifacts_by_thread(db, *, thread_id, include_history=False, user_id=None):
             _ = db
+            _ = include_history, user_id
             return [artifact_html, artifact_docx] if thread_id == "thread-1" else []
 
         monkeypatch.setattr(file_service, "get_file_by_id", fake_get_file_by_id)
@@ -372,7 +388,11 @@ def test_file_api_supports_artifact_download_and_public_config(
         async def override_db():
             yield None
 
+        async def override_current_user():
+            return current_user
+
         app.dependency_overrides[get_db] = override_db
+        app.dependency_overrides[get_current_user_from_auth_or_query] = override_current_user
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:

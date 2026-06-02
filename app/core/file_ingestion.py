@@ -47,6 +47,7 @@ class FileIngestionRuntime:
                     await file_service.process_file_ingestion(
                         db,
                         file_id=file_id,
+                        user_id=None,
                         rag_runtime=self.rag_runtime,
                     )
             except Exception as exc:

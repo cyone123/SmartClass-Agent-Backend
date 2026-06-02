@@ -135,8 +135,11 @@ async def _list_artifacts(
     *,
     thread_id: str,
     include_history: bool,
+    user_id: int | None = None,
 ) -> list[ArtifactFile]:
     stmt = select(ArtifactFile).where(ArtifactFile.thread_id == thread_id)
+    if user_id is not None:
+        stmt = stmt.where(ArtifactFile.user_id == user_id)
     if not include_history:
         stmt = stmt.where(
             or_(
@@ -154,16 +157,18 @@ async def list_artifacts_by_thread(
     *,
     thread_id: str,
     include_history: bool = False,
+    user_id: int | None = None,
 ) -> list[ArtifactFile]:
-    return await _list_artifacts(db, thread_id=thread_id, include_history=include_history)
+    return await _list_artifacts(db, thread_id=thread_id, include_history=include_history, user_id=user_id)
 
 
 async def list_current_artifacts_by_thread(
     db: AsyncSession,
     *,
     thread_id: str,
+    user_id: int | None = None,
 ) -> list[ArtifactFile]:
-    artifacts = await _list_artifacts(db, thread_id=thread_id, include_history=False)
+    artifacts = await _list_artifacts(db, thread_id=thread_id, include_history=False, user_id=user_id)
     return [artifact for artifact in artifacts if artifact.status == ARTIFACT_STATUS_READY or artifact.is_current]
 
 
@@ -172,11 +177,13 @@ async def get_latest_current_artifact_by_type(
     *,
     thread_id: str,
     artifact_type: ArtifactType,
+    user_id: int | None = None,
 ) -> ArtifactFile | None:
     stmt = (
         select(ArtifactFile)
         .where(
             ArtifactFile.thread_id == thread_id,
+            *([ArtifactFile.user_id == user_id] if user_id is not None else []),
             ArtifactFile.artifact_type == artifact_type,
             ArtifactFile.is_current.is_(True),
         )
@@ -190,8 +197,9 @@ async def list_latest_current_artifacts_by_thread(
     db: AsyncSession,
     *,
     thread_id: str,
+    user_id: int | None = None,
 ) -> list[ArtifactFile]:
-    artifacts = await list_current_artifacts_by_thread(db, thread_id=thread_id)
+    artifacts = await list_current_artifacts_by_thread(db, thread_id=thread_id, user_id=user_id)
     latest_by_type: dict[str, ArtifactFile] = {}
     for artifact in artifacts:
         existing = latest_by_type.get(artifact.artifact_type)
@@ -208,11 +216,13 @@ async def list_ready_current_artifacts_by_thread(
     db: AsyncSession,
     *,
     thread_id: str,
+    user_id: int | None = None,
 ) -> list[ArtifactFile]:
     stmt = (
         select(ArtifactFile)
         .where(
             ArtifactFile.thread_id == thread_id,
+            *([ArtifactFile.user_id == user_id] if user_id is not None else []),
             ArtifactFile.is_current.is_(True),
             ArtifactFile.status == ARTIFACT_STATUS_READY,
         )
@@ -232,8 +242,9 @@ async def list_latest_ready_current_artifacts_by_thread(
     db: AsyncSession,
     *,
     thread_id: str,
+    user_id: int | None = None,
 ) -> list[ArtifactFile]:
-    artifacts = await list_ready_current_artifacts_by_thread(db, thread_id=thread_id)
+    artifacts = await list_ready_current_artifacts_by_thread(db, thread_id=thread_id, user_id=user_id)
     latest_by_type: dict[str, ArtifactFile] = {}
     for artifact in artifacts:
         existing = latest_by_type.get(artifact.artifact_type)
@@ -246,6 +257,22 @@ async def list_latest_ready_current_artifacts_by_thread(
     )
 
 
+async def get_current_artifact_by_id(
+    db: AsyncSession,
+    artifact_id: int,
+    *,
+    user_id: int | None = None,
+) -> ArtifactFile | None:
+    stmt = select(ArtifactFile).where(
+        ArtifactFile.id == artifact_id,
+        ArtifactFile.is_current.is_(True),
+    )
+    if user_id is not None:
+        stmt = stmt.where(ArtifactFile.user_id == user_id)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def create_running_artifact(
     db: AsyncSession,
     *,
@@ -253,13 +280,14 @@ async def create_running_artifact(
     thread_id: str,
     artifact_type: ArtifactType,
     run_id: str,
+    user_id: int,
     title: str | None = None,
     parent_artifact_id: int | None = None,
     root_artifact_id: int | None = None,
     revision_number: int | None = None,
 ) -> ArtifactFile:
-    await ensure_plan_exists(db, plan_id)
-    await ensure_thread_belongs_to_plan(db, plan_id, thread_id)
+    await ensure_plan_exists(db, plan_id, user_id=user_id)
+    await ensure_thread_belongs_to_plan(db, plan_id, thread_id, user_id=user_id)
 
     normalized_title = (title or _default_title(artifact_type)).strip() or _default_title(artifact_type)
     original_name = _build_original_name(normalized_title, artifact_type)
@@ -282,6 +310,7 @@ async def create_running_artifact(
 
     artifact = ArtifactFile(
         plan_id=plan_id,
+        user_id=user_id,
         thread_id=thread_id,
         artifact_type=artifact_type,
         parent_artifact_id=parent_artifact_id,
@@ -326,6 +355,7 @@ async def create_revision_artifact(
         artifact_type=source_artifact.artifact_type,  # type: ignore[arg-type]
         run_id=run_id,
         title=title or source_artifact.title,
+        user_id=source_artifact.user_id,
         parent_artifact_id=source_artifact.id,
         root_artifact_id=source_artifact.root_artifact_id or source_artifact.id,
         revision_number=(source_artifact.revision_number or 1) + 1,
@@ -361,6 +391,7 @@ async def mark_artifact_ready(
 
     current_stmt = select(ArtifactFile).where(
         ArtifactFile.thread_id == artifact.thread_id,
+        ArtifactFile.user_id == artifact.user_id,
         ArtifactFile.artifact_type == artifact.artifact_type,
         ArtifactFile.is_current.is_(True),
         ArtifactFile.id != artifact.id,
@@ -408,15 +439,23 @@ async def mark_artifact_failed(
 async def get_artifact_by_id(
     db: AsyncSession,
     artifact_id: int,
+    *,
+    user_id: int | None = None,
 ) -> ArtifactFile | None:
-    return await db.get(ArtifactFile, artifact_id)
+    if user_id is None:
+        return await db.get(ArtifactFile, artifact_id)
+    stmt = select(ArtifactFile).where(ArtifactFile.id == artifact_id, ArtifactFile.user_id == user_id)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
 
 
 async def require_artifact_by_id(
     db: AsyncSession,
     artifact_id: int,
+    *,
+    user_id: int | None = None,
 ) -> ArtifactFile:
-    artifact = await get_artifact_by_id(db, artifact_id)
+    artifact = await get_artifact_by_id(db, artifact_id, user_id=user_id)
     if artifact is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
