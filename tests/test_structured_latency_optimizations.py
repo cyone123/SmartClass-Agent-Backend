@@ -155,3 +155,38 @@ def test_intent_router_node_falls_back_to_reliable_model(monkeypatch) -> None:
     assert result == {"intent": "teaching_plan"}
     assert len(fast_router.calls) == 1
     assert len(fallback_router.calls) == 1
+
+
+def test_structured_output_logging_handles_include_raw_response(monkeypatch) -> None:
+    response = {
+        "raw": AIMessage(content='{"intent":"teaching_plan"}'),
+        "parsed": graph_module.ConversationRoute(
+            intent="teaching_plan",
+            artifact_targets=[],
+            needs_clarification=False,
+        ),
+        "parsing_error": None,
+    }
+    router = FakeRunnable(response=response)
+
+    monkeypatch.setattr(graph_module, "router", router)
+    monkeypatch.setattr(
+        graph_module,
+        "router_fallback",
+        FakeRunnable(error=AssertionError("fallback should not be called")),
+    )
+    monkeypatch.setattr(
+        graph_module,
+        "structured_fast_llm",
+        FakeModel("fast-model", "https://fast.example.com/v1"),
+    )
+    graph_module.STRUCTURED_SCHEMA_CALL_COUNTS.clear()
+
+    result = graph_module._invoke_structured_with_fallback(
+        schema_name="ConversationRoute",
+        primary_runnable=router,
+        primary_model=graph_module.structured_fast_llm,
+        messages=[HumanMessage(content="请帮我设计一节课")],
+    )
+
+    assert result.intent == "teaching_plan"

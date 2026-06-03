@@ -9,6 +9,13 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langgraph.store.base import BaseStore, Item, SearchItem
 
 from app.core.llm import memory_llm
+from app.core.observability import (
+    ObservationSink,
+    RunContext,
+    get_observation_sink,
+    log_observation,
+    observe_llm_call,
+)
 
 DEFAULT_USER_ID = "default-teacher"
 PROFILE_MEMORY_KIND = "profile"
@@ -379,6 +386,8 @@ async def choose_relevant_experience_memories(
     store: BaseStore | None,
     user_id: str | None,
     state: dict[str, Any],
+    run_context: RunContext | None = None,
+    observation_sink: ObservationSink | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     if store is None:
         return "", []
@@ -408,10 +417,30 @@ async def choose_relevant_experience_memories(
             )
         ),
     ]
+    context = run_context or RunContext(run_id="memory", user_id=user_id, agent_name="memory")
+    sink = observation_sink or get_observation_sink()
     try:
-        selection_message = await experience_selector.ainvoke(prompt)
+        selection_message = await observe_llm_call(
+            "llm.call",
+            lambda: experience_selector.ainvoke(prompt),
+            context=context.with_agent("memory"),
+            sink=sink,
+            model=experience_selector,
+            messages=prompt,
+            fields={"node": "experience_memory_selection_node"},
+        )
     except Exception as exc:
-        print(f"[memory] experience selection skipped: {exc}")
+        log_observation(
+            "memory.experience_selection.skipped",
+            context=context.with_agent("memory"),
+            sink=sink,
+            status="failed",
+            fields={
+                "error_category": "memory_error",
+                "error_type": exc.__class__.__name__,
+                "error_message": str(exc),
+            },
+        )
         return "", []
     tool_call = _first_tool_call(selection_message, {"select_experience_memories"})
     if tool_call is None:
@@ -458,6 +487,8 @@ async def reflect_profile_memory(
     store: BaseStore | None,
     user_id: str | None,
     state: dict[str, Any],
+    run_context: RunContext | None = None,
+    observation_sink: ObservationSink | None = None,
 ) -> dict[str, Any] | None:
     if store is None:
         return None
@@ -483,10 +514,30 @@ async def reflect_profile_memory(
             )
         ),
     ]
+    context = run_context or RunContext(run_id="memory", user_id=user_id, agent_name="memory")
+    sink = observation_sink or get_observation_sink()
     try:
-        response = await profile_reflector.ainvoke(prompt)
+        response = await observe_llm_call(
+            "llm.call",
+            lambda: profile_reflector.ainvoke(prompt),
+            context=context.with_agent("memory"),
+            sink=sink,
+            model=profile_reflector,
+            messages=prompt,
+            fields={"node": "profile_memory_reflection_node"},
+        )
     except Exception as exc:
-        print(f"[memory] profile reflection skipped: {exc}")
+        log_observation(
+            "memory.profile_reflection.skipped",
+            context=context.with_agent("memory"),
+            sink=sink,
+            status="failed",
+            fields={
+                "error_category": "memory_error",
+                "error_type": exc.__class__.__name__,
+                "error_message": str(exc),
+            },
+        )
         return None
     return await apply_memory_tool_call(
         store,
@@ -505,6 +556,8 @@ async def reflect_experience_memory(
     state: dict[str, Any],
     thread_id: str | None,
     plan_id: int | None,
+    run_context: RunContext | None = None,
+    observation_sink: ObservationSink | None = None,
 ) -> dict[str, Any] | None:
     if store is None:
         return None
@@ -534,10 +587,36 @@ async def reflect_experience_memory(
             )
         ),
     ]
+    context = run_context or RunContext(
+        run_id="memory",
+        thread_id=thread_id,
+        plan_id=plan_id,
+        user_id=user_id,
+        agent_name="memory",
+    )
+    sink = observation_sink or get_observation_sink()
     try:
-        response = await experience_reflector.ainvoke(prompt)
+        response = await observe_llm_call(
+            "llm.call",
+            lambda: experience_reflector.ainvoke(prompt),
+            context=context.with_agent("memory"),
+            sink=sink,
+            model=experience_reflector,
+            messages=prompt,
+            fields={"node": "experience_memory_reflection_node"},
+        )
     except Exception as exc:
-        print(f"[memory] experience reflection skipped: {exc}")
+        log_observation(
+            "memory.experience_reflection.skipped",
+            context=context.with_agent("memory"),
+            sink=sink,
+            status="failed",
+            fields={
+                "error_category": "memory_error",
+                "error_type": exc.__class__.__name__,
+                "error_message": str(exc),
+            },
+        )
         return None
     return await apply_memory_tool_call(
         store,

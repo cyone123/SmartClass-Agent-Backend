@@ -8,6 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import get_current_user
 from app.core.agent import AgentRuntime, get_agent_runtime
+from app.core.observability import (
+    RunContext,
+    get_observation_sink,
+    log_observation,
+)
 from app.models.file import AttachmentFile
 from app.models.user import User
 from app.dependencies.db import get_db
@@ -91,33 +96,76 @@ async def chat(
 
     async def event_stream():
         run_id = uuid4().hex
+        run_context = RunContext(
+            run_id=run_id,
+            thread_id=thread_id,
+            plan_id=plan_id,
+            user_id=str(current_user.id),
+            agent_name="chat_stream",
+        )
+        observation_sink = get_observation_sink()
         yield format_sse_json_event(
             {"thread_id": thread_id, "run_id": run_id},
             event="metadata",
         )
 
-        async for event in agent_runtime.stream_agent_events(
-            message.message or "",
-            thread_id,
-            run_id=run_id,
-            user_id=str(current_user.id),
-            plan_id=plan_id,
-            attachments=attachments,
-            approval=approval,
-        ):
-            event_name = event.get("event")
-            payload = event.get("data")
+        log_observation(
+            "chat.stream.request",
+            context=run_context,
+            sink=observation_sink,
+            status="running",
+            fields={
+                "message_size": len(message.message or ""),
+                "attachment_count": len(attachment_ids),
+                "has_approval": bool(approval),
+            },
+        )
+        try:
+            async for event in agent_runtime.stream_agent_events(
+                message.message or "",
+                thread_id,
+                run_id=run_id,
+                user_id=str(current_user.id),
+                plan_id=plan_id,
+                attachments=attachments,
+                approval=approval,
+                run_context=run_context,
+                observation_sink=observation_sink,
+            ):
+                event_name = event.get("event")
+                payload = event.get("data")
 
-            if event_name in {
-                "progress",
-                "token",
-                "error",
-                "suggestions",
-                "artifact",
-                "artifact_trace",
-                "approval",
-            }:
-                yield format_sse_json_event(payload, event=event_name)
+                if event_name in {
+                    "progress",
+                    "token",
+                    "error",
+                    "suggestions",
+                    "artifact",
+                    "artifact_trace",
+                    "approval",
+                }:
+                    yield format_sse_json_event(payload, event=event_name)
+            log_observation(
+                "chat.stream.completed",
+                context=run_context,
+                sink=observation_sink,
+                status="success",
+            )
+        except Exception as exc:
+            log_observation(
+                "chat.stream.failed",
+                context=run_context,
+                sink=observation_sink,
+                status="failed",
+                fields={
+                    "error_type": exc.__class__.__name__,
+                    "error_message": str(exc),
+                },
+            )
+            yield format_sse_json_event(
+                {"run_id": run_id, "message": "对话处理失败，请稍后重试。"},
+                event="error",
+            )
 
         yield format_sse_event("[DONE]", event="done")
 

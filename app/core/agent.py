@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import re
 import shutil
-import traceback
+import time
 import zipfile
 from collections.abc import AsyncIterator
 from contextlib import suppress
@@ -36,7 +37,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.base import BaseStore
 from langgraph.types import Command
 
-from app.config import get_backend_root
+from app.config import get_backend_root, get_workspace_execution_backend
 from app.core.graph import (
     RESUMABLE_INTERRUPT_NODES,
     build_agent_graph,
@@ -44,6 +45,20 @@ from app.core.graph import (
     get_pending_approval_payload,
 )
 from app.core.llm import get_model, get_small_model, get_suggestion_model
+from app.core.observability import (
+    ObservationSink,
+    RunContext,
+    categorize_error,
+    extract_token_usage,
+    get_observation_sink,
+    log_observation,
+    observe_llm_call,
+    observation_sink_from_config,
+    record_metric,
+    run_context_from_config,
+    sanitize_observation_fields,
+    trace_span,
+)
 from app.core.progress import (
     ProgressReporter,
     ProgressTracker,
@@ -126,6 +141,9 @@ def get_thread_config(
     *,
     run_id: str | None = None,
     user_id: str | None = None,
+    plan_id: int | None = None,
+    run_context: RunContext | None = None,
+    observation_sink: ObservationSink | None = None,
     progress_reporter: ProgressReporter | None = None,
     artifact_event_emitter: ArtifactEventEmitter | None = None,
     artifact_trace_event_emitter: ArtifactTraceEventEmitter | None = None,
@@ -137,6 +155,12 @@ def get_thread_config(
         configurable["run_id"] = run_id
     if user_id is not None:
         configurable["user_id"] = user_id
+    if plan_id is not None:
+        configurable["plan_id"] = plan_id
+    if run_context is not None:
+        configurable["run_context"] = run_context
+    if observation_sink is not None:
+        configurable["observation_sink"] = observation_sink
     if progress_reporter is not None:
         configurable["progress_reporter"] = progress_reporter
     if artifact_event_emitter is not None:
@@ -153,6 +177,28 @@ def _get_configurable_value(config: RunnableConfig | None, key: str) -> Any:
     if not isinstance(configurable, dict):
         return None
     return configurable.get(key)
+
+
+def _call_accepts_kwarg(callable_obj: Any, kwarg: str) -> bool:
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return True
+    return any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD or name == kwarg
+        for name, parameter in signature.parameters.items()
+    )
+
+
+def _get_run_context(config: RunnableConfig | None, *, default_run_id: str = "adhoc") -> RunContext:
+    value = _get_configurable_value(config, "run_context")
+    if isinstance(value, RunContext):
+        return value
+    return run_context_from_config(config, default_run_id=default_run_id)
+
+
+def _get_observation_sink(config: RunnableConfig | None) -> ObservationSink:
+    return observation_sink_from_config(config)
 
 
 def _get_artifact_event_emitter(config: RunnableConfig | None) -> ArtifactEventEmitter | None:
@@ -538,50 +584,163 @@ class SkillExecutionPolicyMiddleware(AgentMiddleware[SkillAwareAgentState, Any, 
         return await handler(request)
 
 
-class AgentConsoleLoggingMiddleware(AgentMiddleware):
-    """Print model and tool activity to the console for debugging."""
+class LLMObservationMiddleware(AgentMiddleware):
+    """Record safe model/tool metrics without logging prompt or tool payloads."""
 
     def __init__(self, *, agent_name: str) -> None:
         self.agent_name = agent_name
 
-    def _log_model_response(self, response: ModelResponse) -> None:
-        for message in response.result:
-            if not isinstance(message, AIMessage):
-                continue
-            if _message_to_text(message).strip():
-                print(f"======================{self.agent_name}:AIMessage==========================")
-                print(f"AIMessage: {_message_to_text(message)}")
-            if message.tool_calls:
-                print(f"======================{self.agent_name}:AI_Tool_calls======================")
-                print(f"Tool_calls: {message.tool_calls}")
+    def _request_config(self, request: Any) -> RunnableConfig | None:
+        config = getattr(request, "config", None)
+        if config is not None:
+            return config
+        runtime = getattr(request, "runtime", None)
+        config = getattr(runtime, "config", None)
+        if config is not None:
+            return config
+        state = getattr(request, "state", None)
+        if isinstance(state, dict):
+            for key in ("config", "runtime_config"):
+                value = state.get(key)
+                if value is not None:
+                    return value
+            configurable = state.get("configurable")
+            if isinstance(configurable, dict):
+                return {"configurable": configurable}
+        return None
 
-    def _log_tool_output(self, response: Any, *, fallback_tool_name: str | None = None) -> None:
-        tool_messages: list[ToolMessage] = []
-        if isinstance(response, ToolMessage):
-            tool_messages = [response]
-        elif isinstance(response, Command):
-            update = getattr(response, "update", None)
-            if isinstance(update, dict):
-                messages = update.get("messages", []) or []
-                tool_messages = [
-                    message for message in messages if isinstance(message, ToolMessage)
-                ]
+    def _request_messages(self, request: ModelRequest) -> list[AnyMessage]:
+        messages = getattr(request, "messages", None)
+        if isinstance(messages, list):
+            return [message for message in messages if isinstance(message, BaseMessage)]
+        state = getattr(request, "state", {}) or {}
+        if isinstance(state, dict):
+            state_messages = state.get("messages", []) or []
+            return [message for message in state_messages if isinstance(message, BaseMessage)]
+        return []
 
-        for message in tool_messages:
-            print(f"======================{self.agent_name}:ToolMessage========================")
-            print(
-                "ToolMessage: "
-                f"{message.content}. "
-                f"ToolName: {message.name or fallback_tool_name}"
+    def _record_model_call(
+        self,
+        request: ModelRequest,
+        response: ModelResponse | None,
+        *,
+        duration_ms: int,
+        status: str,
+        error: BaseException | None = None,
+    ) -> None:
+        try:
+            config = self._request_config(request)
+            context = _get_run_context(config).with_agent(self.agent_name)
+            sink = _get_observation_sink(config)
+            request_messages = self._request_messages(request)
+            ai_messages = [
+                message for message in (response.result if response is not None else [])
+                if isinstance(message, AIMessage)
+            ]
+            final_ai_message = ai_messages[-1] if ai_messages else None
+            tool_names: list[str] = []
+            for message in ai_messages:
+                for tool_call in message.tool_calls or []:
+                    name = tool_call.get("name")
+                    if isinstance(name, str):
+                        tool_names.append(name)
+            token_usage = extract_token_usage(response)
+            if not token_usage.get("token_usage_available"):
+                token_usage = extract_token_usage(final_ai_message)
+            fields: dict[str, Any] = {
+                "agent_name": self.agent_name,
+                "model": str(getattr(getattr(request, "model", None), "model_name", None) or "unknown"),
+                "message_count": len(request_messages),
+                "input_size": sum(len(_message_to_text(message)) for message in request_messages),
+                "output_size": sum(len(_message_to_text(message)) for message in ai_messages),
+                "tool_call_count": len(tool_names),
+                "tool_names": list(dict.fromkeys(tool_names)),
+                **token_usage,
+            }
+            if error is not None:
+                fields.update(
+                    {
+                        "error_category": categorize_error(error),
+                        "error_type": error.__class__.__name__,
+                        "error_message": str(error),
+                    }
+                )
+            record_metric(
+                "llm.call",
+                context=context,
+                sink=sink,
+                status="success" if status == "success" else "failed",
+                duration_ms=duration_ms,
+                fields=fields,
             )
+        except Exception:
+            return
+
+    def _record_tool_call(
+        self,
+        request: Any,
+        response: Any | None,
+        *,
+        duration_ms: int,
+        status: str,
+        error: BaseException | None = None,
+    ) -> None:
+        try:
+            config = self._request_config(request)
+            context = _get_run_context(config).with_agent(self.agent_name)
+            sink = _get_observation_sink(config)
+            tool_call = getattr(request, "tool_call", {}) or {}
+            tool_name = tool_call.get("name") if isinstance(tool_call, dict) else None
+            fields: dict[str, Any] = {
+                "agent_name": self.agent_name,
+                "tool_name": tool_name or "unknown",
+                "tool_arg_keys": sorted((tool_call.get("args") or {}).keys())
+                if isinstance(tool_call, dict) and isinstance(tool_call.get("args"), dict)
+                else [],
+                "response_type": response.__class__.__name__ if response is not None else None,
+            }
+            if error is not None:
+                fields.update(
+                    {
+                        "error_category": categorize_error(error),
+                        "error_type": error.__class__.__name__,
+                        "error_message": str(error),
+                    }
+                )
+            record_metric(
+                "tool.invoke",
+                context=context,
+                sink=sink,
+                status="success" if status == "success" else "failed",
+                duration_ms=duration_ms,
+                fields=fields,
+            )
+        except Exception:
+            return
 
     def wrap_model_call(
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
-        response = handler(request)
-        self._log_model_response(response)
+        start = time.perf_counter()
+        try:
+            response = handler(request)
+        except Exception as exc:
+            self._record_model_call(
+                request,
+                None,
+                duration_ms=int((time.perf_counter() - start) * 1000),
+                status="failed",
+                error=exc,
+            )
+            raise
+        self._record_model_call(
+            request,
+            response,
+            duration_ms=int((time.perf_counter() - start) * 1000),
+            status="success",
+        )
         return response
 
     async def awrap_model_call(
@@ -589,18 +748,66 @@ class AgentConsoleLoggingMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
-        response = await handler(request)
-        self._log_model_response(response)
+        start = time.perf_counter()
+        try:
+            response = await handler(request)
+        except Exception as exc:
+            self._record_model_call(
+                request,
+                None,
+                duration_ms=int((time.perf_counter() - start) * 1000),
+                status="failed",
+                error=exc,
+            )
+            raise
+        self._record_model_call(
+            request,
+            response,
+            duration_ms=int((time.perf_counter() - start) * 1000),
+            status="success",
+        )
         return response
 
     def wrap_tool_call(self, request, handler):
-        response = handler(request)
-        self._log_tool_output(response, fallback_tool_name=request.tool_call.get("name"))
+        start = time.perf_counter()
+        try:
+            response = handler(request)
+        except Exception as exc:
+            self._record_tool_call(
+                request,
+                None,
+                duration_ms=int((time.perf_counter() - start) * 1000),
+                status="failed",
+                error=exc,
+            )
+            raise
+        self._record_tool_call(
+            request,
+            response,
+            duration_ms=int((time.perf_counter() - start) * 1000),
+            status="success",
+        )
         return response
 
     async def awrap_tool_call(self, request, handler):
-        response = await handler(request)
-        self._log_tool_output(response, fallback_tool_name=request.tool_call.get("name"))
+        start = time.perf_counter()
+        try:
+            response = await handler(request)
+        except Exception as exc:
+            self._record_tool_call(
+                request,
+                None,
+                duration_ms=int((time.perf_counter() - start) * 1000),
+                status="failed",
+                error=exc,
+            )
+            raise
+        self._record_tool_call(
+            request,
+            response,
+            duration_ms=int((time.perf_counter() - start) * 1000),
+            status="success",
+        )
         return response
 
 
@@ -651,7 +858,10 @@ class AgentRuntime:
                 "and execute them there. For document analysis, prefer `run_skill_script`. "
                 "Never use `shell` to run Python, Node.js, npm, or pip commands."
             ),
-            middleware=list(base_middleware),
+            middleware=[
+                *base_middleware,
+                LLMObservationMiddleware(agent_name="attachment_skill_agent"),
+            ],
             name="attachment_skill_agent",
         )
 
@@ -706,7 +916,7 @@ class AgentRuntime:
     ):
         middleware = [
             *base_middleware,
-            AgentConsoleLoggingMiddleware(agent_name=agent_name),
+            LLMObservationMiddleware(agent_name=agent_name),
         ]
         return create_agent(
             model=get_model(streaming=False),
@@ -723,10 +933,28 @@ class AgentRuntime:
         *,
         thread_id: str | None = None,
         run_id: str | None = None,
+        user_id: str | None = None,
+        plan_id: int | None = None,
+        run_context: RunContext | None = None,
+        observation_sink: ObservationSink | None = None,
         progress_reporter: ProgressReporter | None = None,
     ) -> str:
+        context = (run_context or RunContext(run_id=run_id or thread_id or "adhoc")).with_agent(
+            "attachment_agent"
+        )
+        sink = observation_sink or get_observation_sink()
         if progress_reporter:
             progress_reporter.emit("attachment_analysis", "running")
+        log_observation(
+            "attachment_analysis",
+            context=context,
+            sink=sink,
+            status="running",
+            fields={
+                "message_size": len(message),
+                "attachment_count": len(file_paths),
+            },
+        )
 
         user_prompt = (
             "Analyze the uploaded attachment files according to the user's request. "
@@ -744,6 +972,10 @@ class AgentRuntime:
                 config=get_thread_config(
                     thread_id or run_id,
                     run_id=run_id,
+                    user_id=user_id,
+                    plan_id=plan_id,
+                    run_context=context,
+                    observation_sink=sink,
                     progress_reporter=progress_reporter,
                 ),
                 stream_mode="updates",
@@ -753,28 +985,33 @@ class AgentRuntime:
                     continue
 
                 for step, data in chunk["data"].items():
-                    if step == "tools":
-                        print("======================ToolMessage========================")
-                        print(
-                            "ToolMessage: "
-                            f"{data['messages'][-1].content}. "
-                            f"ToolName: {data['messages'][-1].name}"
-                        )
                     if step == "model":
-                        if data["messages"][-1].content:
-                            print("======================AIMessage==========================")
-                            print(f"AIMessage: {data['messages'][-1].content}")
-                        if data["messages"][-1].tool_calls:
-                            print("======================AI_Tool_calls======================")
-                            print(f"Tool_calls: {data['messages'][-1].tool_calls}")
                         final_msg_content = data["messages"][-1].content
         except Exception as exc:
             if progress_reporter:
                 progress_reporter.emit("attachment_analysis", "failed", detail=str(exc))
+            log_observation(
+                "attachment_analysis",
+                context=context,
+                sink=sink,
+                status="failed",
+                fields={
+                    "error_category": categorize_error(exc),
+                    "error_type": exc.__class__.__name__,
+                    "error_message": str(exc),
+                },
+            )
             raise
 
         if progress_reporter:
             progress_reporter.emit("attachment_analysis", "success", detail="已完成附件分析")
+        log_observation(
+            "attachment_analysis",
+            context=context,
+            sink=sink,
+            status="success",
+            fields={"summary_size": len(final_msg_content)},
+        )
         return final_msg_content
 
     def _partition_attachments(
@@ -797,6 +1034,10 @@ class AgentRuntime:
         *,
         thread_id: str | None = None,
         run_id: str | None = None,
+        user_id: str | None = None,
+        plan_id: int | None = None,
+        run_context: RunContext | None = None,
+        observation_sink: ObservationSink | None = None,
         progress_reporter: ProgressReporter | None = None,
     ) -> str:
         sections: list[str] = []
@@ -809,6 +1050,10 @@ class AgentRuntime:
                     [str(path) for path in document_paths],
                     thread_id=thread_id,
                     run_id=run_id,
+                    user_id=user_id,
+                    plan_id=plan_id,
+                    run_context=run_context,
+                    observation_sink=observation_sink,
                     progress_reporter=progress_reporter,
                 )
             if document_summary.strip():
@@ -883,7 +1128,7 @@ class AgentRuntime:
         approval: dict[str, Any] | None = None,
     ):
         state_snapshot = await self._get_thread_state_snapshot(thread_id)
-        if await self._should_resume_thread(thread_id):
+        if self._has_resumable_interrupt(state_snapshot):
             if approval:
                 resume_payload = {
                     "action": approval["action"],
@@ -941,7 +1186,13 @@ class AgentRuntime:
         messages = values.get("messages", []) or []
         return [message for message in messages if isinstance(message, BaseMessage)]
 
-    async def _generate_follow_up_suggestions(self, thread_id: str) -> list[str]:
+    async def _generate_follow_up_suggestions(
+        self,
+        thread_id: str,
+        *,
+        run_context: RunContext | None = None,
+        observation_sink: ObservationSink | None = None,
+    ) -> list[str]:
         messages = await self._get_visible_thread_messages(thread_id)
         final_response_text = get_final_response_text(messages)
         if not final_response_text:
@@ -970,17 +1221,46 @@ class AgentRuntime:
             ),
         ]
 
+        context = (
+            run_context
+            or RunContext(run_id="suggestions", thread_id=thread_id, agent_name="suggestions")
+        ).with_agent("suggestions")
+        sink = observation_sink or get_observation_sink()
         try:
-            result = await self.suggestion_generator.ainvoke(prompt_messages)
+            result = await observe_llm_call(
+                "llm.call",
+                lambda: self.suggestion_generator.ainvoke(prompt_messages),
+                context=context,
+                sink=sink,
+                model=self.suggestion_generator,
+                messages=prompt_messages,
+                fields={"node": "follow_up_suggestions"},
+            )
         except Exception as exc:
-            print(f"[suggestions] generation failed: {exc}")
+            log_observation(
+                "suggestions.generation.failed",
+                context=context,
+                sink=sink,
+                status="failed",
+                fields={
+                    "error_category": categorize_error(exc),
+                    "error_type": exc.__class__.__name__,
+                    "error_message": str(exc),
+                },
+            )
             return []
 
         suggestions = _sanitize_suggestions(
             _split_suggestion_lines(_message_to_text(result).strip())
         )
         if len(suggestions) < SUGGESTION_COUNT:
-            print("[suggestions] discarded because the model did not return enough unique suggestions.")
+            log_observation(
+                "suggestions.generation.discarded",
+                context=context,
+                sink=sink,
+                status="failed",
+                fields={"suggestion_count": len(suggestions)},
+            )
             return []
         return suggestions
 
@@ -1370,6 +1650,29 @@ class AgentRuntime:
             return {state_key: _failed_subagent_result(artifact_type, error=error_message)}
 
         sub_run_id = self._artifact_run_id(run_id, artifact_type)
+        parent_context = _get_run_context(config, default_run_id=run_id or "adhoc")
+        observation_sink = _get_observation_sink(config)
+        span_event = "artifact.generate" if mode == "create" else "artifact.revise"
+        artifact_started_at = time.perf_counter()
+        workspace_backend = get_workspace_execution_backend()
+        artifact_context = RunContext(
+            run_id=sub_run_id,
+            thread_id=thread_id or parent_context.thread_id,
+            plan_id=int(plan_id),
+            user_id=user_id_raw or parent_context.user_id,
+            agent_name=f"artifact_{artifact_type}_agent",
+        )
+        log_observation(
+            span_event,
+            context=artifact_context,
+            sink=observation_sink,
+            status="running",
+            fields={
+                "artifact_type": artifact_type,
+                "source_artifact_id": None,
+                "workspace_backend": workspace_backend,
+            },
+        )
         artifact_record: ArtifactFile | None = None
         source_artifact: dict[str, Any] | None = None
         trace_entry_index = 0
@@ -1471,6 +1774,9 @@ class AgentRuntime:
                 self._artifact_agent_thread_id(thread_id, artifact_type),
                 run_id=sub_run_id,
                 user_id=user_id_raw,
+                plan_id=plan_id,
+                run_context=artifact_context,
+                observation_sink=observation_sink,
             )
             if mode == "revise":
                 if isinstance(main_reporter, ProgressReporter):
@@ -1532,6 +1838,8 @@ class AgentRuntime:
                     refreshed_record,
                     output_path=output_path,
                     title=artifact_title,
+                    run_context=artifact_context,
+                    observation_sink=observation_sink,
                 )
                 if emitter:
                     emitter(
@@ -1551,6 +1859,20 @@ class AgentRuntime:
                 "status",
                 f"{artifact_title}{'生成完成' if mode == 'create' else '修改完成'}",
                 status="success",
+            )
+            record_metric(
+                span_event,
+                context=artifact_context,
+                sink=observation_sink,
+                status="success",
+                duration_ms=int((time.perf_counter() - artifact_started_at) * 1000),
+                fields={
+                    "artifact_type": artifact_type,
+                    "artifact_id": artifact_record.id,
+                    "source_artifact_id": source_artifact.get("id") if source_artifact else None,
+                    "revision_number": getattr(artifact_record, "revision_number", None),
+                    "workspace_backend": workspace_backend,
+                },
             )
             return {
                 state_key: _success_subagent_result(
@@ -1572,6 +1894,8 @@ class AgentRuntime:
                         db,
                         refreshed_record,
                         error_message=error_message,
+                        run_context=artifact_context,
+                        observation_sink=observation_sink,
                     )
                     if emitter:
                         emitter(
@@ -1594,6 +1918,23 @@ class AgentRuntime:
                 f"{artifact_title}{'生成失败' if mode == 'create' else '修改失败'}",
                 content=error_message,
                 status="failed",
+            )
+            record_metric(
+                span_event,
+                context=artifact_context,
+                sink=observation_sink,
+                status="failed",
+                duration_ms=int((time.perf_counter() - artifact_started_at) * 1000),
+                fields={
+                    "artifact_type": artifact_type,
+                    "artifact_id": getattr(artifact_record, "id", None),
+                    "source_artifact_id": source_artifact.get("id") if source_artifact else None,
+                    "revision_number": getattr(artifact_record, "revision_number", None),
+                    "workspace_backend": workspace_backend,
+                    "error_category": "artifact_error",
+                    "error_type": exc.__class__.__name__,
+                    "error_message": error_message,
+                },
             )
             return {
                 state_key: _failed_subagent_result(
@@ -1692,8 +2033,21 @@ class AgentRuntime:
         plan_id: int | None = None,
         attachments: list[AttachmentFile] | None = None,
         approval: dict[str, Any] | None = None,
+        run_context: RunContext | None = None,
+        observation_sink: ObservationSink | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         graph_thread_id = thread_id or run_id
+        context = (
+            run_context
+            or RunContext(
+                run_id=run_id,
+                thread_id=graph_thread_id,
+                plan_id=plan_id,
+                user_id=user_id,
+                agent_name="main_graph",
+            )
+        ).with_agent("main_graph")
+        sink = observation_sink or get_observation_sink()
         lock = await self._get_thread_lock(graph_thread_id)
         event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         loop = asyncio.get_running_loop()
@@ -1737,6 +2091,10 @@ class AgentRuntime:
                             attachments,
                             thread_id=graph_thread_id,
                             run_id=run_id,
+                            user_id=user_id,
+                            plan_id=plan_id,
+                            run_context=context,
+                            observation_sink=sink,
                             progress_reporter=progress_reporter,
                         )
 
@@ -1748,22 +2106,54 @@ class AgentRuntime:
                         attachment_paths=attachment_paths,
                         approval=approval,
                     )
-                    print("==============图的输入=========:")
-                    print(f"{graph_input}")
+                    input_fields: dict[str, Any]
+                    if isinstance(graph_input, dict):
+                        input_fields = {
+                            "field_names": sorted(graph_input.keys()),
+                            "message_count": len(graph_input.get("messages", []) or []),
+                            "has_attachment_text": bool(attachment_text),
+                            "attachment_text_size": len(attachment_text or ""),
+                            "has_approval": bool(approval),
+                            "plan_id": plan_id,
+                        }
+                    else:
+                        input_fields = {
+                            "input_type": graph_input.__class__.__name__,
+                            "has_attachment_text": bool(attachment_text),
+                            "attachment_text_size": len(attachment_text or ""),
+                            "has_approval": bool(approval),
+                            "plan_id": plan_id,
+                        }
+                    log_observation(
+                        "graph.input",
+                        context=context,
+                        sink=sink,
+                        status="success",
+                        fields=input_fields,
+                    )
                     received_text_chunk = False
-                    async for event in self.streaming_graph.astream(
-                        graph_input,
-                        config=get_thread_config(
+                    graph_stream_kwargs: dict[str, Any] = {
+                        "config": get_thread_config(
                             graph_thread_id,
                             run_id=run_id,
+                            user_id=user_id,
+                            plan_id=plan_id,
+                            run_context=context,
+                            observation_sink=sink,
                             progress_reporter=progress_reporter,
                             artifact_event_emitter=emit_artifact_event,
                             artifact_trace_event_emitter=emit_artifact_trace_event,
                         ),
-                        context={"user_id": user_id or DEFAULT_USER_ID},
-                        stream_mode="messages",
-                        subgraphs=True,
-                        version="v2",
+                        "stream_mode": "messages",
+                        "subgraphs": True,
+                        "version": "v2",
+                    }
+                    if _call_accepts_kwarg(self.streaming_graph.astream, "context"):
+                        graph_stream_kwargs["context"] = {"user_id": user_id or DEFAULT_USER_ID}
+
+                    async for event in self.streaming_graph.astream(
+                        graph_input,
+                        **graph_stream_kwargs,
                     ):
                         if event.get("type") != "messages":
                             continue
@@ -1803,12 +2193,19 @@ class AgentRuntime:
                         )
 
                     if not received_text_chunk and not pending_approval:
-                        print(
-                            "[stream_agent_events] completed without any text chunks. "
-                            "This usually means nested model calls did not propagate streaming callbacks."
+                        log_observation(
+                            "graph.stream.no_text_chunks",
+                            context=context,
+                            sink=sink,
+                            status="success",
+                            fields={"pending_approval": False},
                         )
                     elif graph_thread_id and not pending_approval:
-                        suggestions = await self._generate_follow_up_suggestions(graph_thread_id)
+                        suggestions = await self._generate_follow_up_suggestions(
+                            graph_thread_id,
+                            run_context=context,
+                            observation_sink=sink,
+                        )
                         if suggestions:
                             await event_queue.put(
                                 {
@@ -1822,8 +2219,17 @@ class AgentRuntime:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                print(f"[stream_agent_events] unhandled exception: {exc!r}")
-                traceback.print_exc()
+                log_observation(
+                    "graph.stream.failed",
+                    context=context,
+                    sink=sink,
+                    status="failed",
+                    fields={
+                        "error_category": categorize_error(exc),
+                        "error_type": exc.__class__.__name__,
+                        "error_message": str(exc),
+                    },
+                )
                 await event_queue.put(
                     {
                         "event": "error",

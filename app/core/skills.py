@@ -17,6 +17,11 @@ from langgraph.types import Command
 import yaml
 
 from app.config import get_skills_root
+from app.core.observability import (
+    log_observation,
+    observation_sink_from_config,
+    run_context_from_config,
+)
 from app.core.progress import emit_progress
 
 SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
@@ -396,6 +401,21 @@ class SkillToolset:
     def __init__(self, registry: SkillRegistry) -> None:
         self.registry = registry
 
+        def observe_skill_event(
+            config,
+            event: str,
+            *,
+            status: str,
+            fields: dict[str, object],
+        ) -> None:
+            log_observation(
+                event,
+                context=run_context_from_config(config).with_agent("skill_toolset"),
+                sink=observation_sink_from_config(config),
+                status=status,  # type: ignore[arg-type]
+                fields=fields,
+            )
+
         @tool
         def load_skill(
             skill_name: str,
@@ -407,8 +427,13 @@ class SkillToolset:
             This returns the skill instructions without YAML frontmatter plus the
             resource and script files available for further progressive disclosure.
             """
-            print(f"==============尝试加载skills:{skill_name}=================")
             config = runtime.config
+            observe_skill_event(
+                config,
+                "skill.load",
+                status="running",
+                fields={"skill_name": skill_name},
+            )
             emit_progress(
                 config,
                 "skill_activation",
@@ -426,6 +451,17 @@ class SkillToolset:
                     "failed",
                     detail=str(exc),
                 )
+                observe_skill_event(
+                    config,
+                    "skill.load",
+                    status="failed",
+                    fields={
+                        "skill_name": skill_name,
+                        "error_category": "tool_error",
+                        "error_type": exc.__class__.__name__,
+                        "error_message": str(exc),
+                    },
+                )
                 return str(exc)
             
             sections = [
@@ -441,13 +477,23 @@ class SkillToolset:
                 "",
                 body,
             ]
-            print(f"==============加载skills完成:{skill_name}=================")
             content = "\n".join(section for section in sections if section != "")
             emit_progress(
                 config,
                 "skill_activation",
                 "success",
                 detail=f"Loaded skill {canonical_name}",
+            )
+            observe_skill_event(
+                config,
+                "skill.load",
+                status="success",
+                fields={
+                    "skill_name": canonical_name,
+                    "reference_count": len(skill.reference_files),
+                    "script_count": len(skill.script_files),
+                    "allowed_tools": list(skill.allowed_tools),
+                },
             )
 
             if runtime.tool_call_id is None:
@@ -477,12 +523,39 @@ class SkillToolset:
             Use this to progressively load supporting markdown, templates, and other
             files after loading a skill.
             """
-            print(f"==============尝试加载skills资源:{skill_name}=================")
+            observe_skill_event(
+                None,
+                "skill.resource.load",
+                status="running",
+                fields={"skill_name": skill_name, "relative_path": relative_path},
+            )
             try:
                 canonical_name = self.registry.resolve_skill_name(skill_name)
                 content = self.registry.read_skill_resource(canonical_name, relative_path)
             except SkillValidationError as exc:
+                observe_skill_event(
+                    None,
+                    "skill.resource.load",
+                    status="failed",
+                    fields={
+                        "skill_name": skill_name,
+                        "relative_path": relative_path,
+                        "error_category": "tool_error",
+                        "error_type": exc.__class__.__name__,
+                        "error_message": str(exc),
+                    },
+                )
                 return str(exc)
+            observe_skill_event(
+                None,
+                "skill.resource.load",
+                status="success",
+                fields={
+                    "skill_name": canonical_name,
+                    "relative_path": relative_path,
+                    "content_size": len(content),
+                },
+            )
 
             return (
                 f"Loaded resource: {canonical_name}/{relative_path}\n\n"
@@ -501,7 +574,16 @@ class SkillToolset:
             script_path as a relative path like: 'scripts/one_script.py'
             Pass optional script arguments with `script_args`, ideally as a JSON array of strings.
             """
-            print(f"==============尝试运行脚本skills:{skill_name}=================")
+            observe_skill_event(
+                None,
+                "skill.script.run",
+                status="running",
+                fields={
+                    "skill_name": skill_name,
+                    "script_path": script_path,
+                    "arg_count": len(script_args or []),
+                },
+            )
             try:
                 canonical_name = self.registry.resolve_skill_name(skill_name)
                 result = self.registry.run_skill_script(
@@ -510,7 +592,31 @@ class SkillToolset:
                     args=script_args,
                 )
             except SkillValidationError as exc:
+                observe_skill_event(
+                    None,
+                    "skill.script.run",
+                    status="failed",
+                    fields={
+                        "skill_name": skill_name,
+                        "script_path": script_path,
+                        "error_category": "tool_error",
+                        "error_type": exc.__class__.__name__,
+                        "error_message": str(exc),
+                    },
+                )
                 return str(exc)
+            observe_skill_event(
+                None,
+                "skill.script.run",
+                status="success",
+                fields={
+                    "skill_name": canonical_name,
+                    "script_path": script_path,
+                    "exit_code": result.exit_code,
+                    "stdout_size": len(result.stdout or ""),
+                    "stderr_size": len(result.stderr or ""),
+                },
+            )
             return result.format_for_agent()
 
         self.load_skill = load_skill

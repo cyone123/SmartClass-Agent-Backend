@@ -66,6 +66,41 @@ def get_file_storage_root() -> Path:
     return get_backend_root() / "storage"
 
 
+def get_observability_enabled() -> bool:
+    return _get_bool_env("OBSERVABILITY_ENABLED", True)
+
+
+def get_observability_log_level() -> str:
+    return (get_env("OBSERVABILITY_LOG_LEVEL", "info") or "info").strip().lower()
+
+
+def get_observability_trace_jsonl_enabled() -> bool:
+    return _get_bool_env("OBSERVABILITY_TRACE_JSONL_ENABLED", False)
+
+
+def get_observability_trace_jsonl_dir() -> Path:
+    storage_root = get_file_storage_root().resolve()
+    configured = get_env("OBSERVABILITY_TRACE_JSONL_DIR")
+    if configured:
+        candidate = Path(configured).expanduser().resolve()
+    else:
+        candidate = storage_root / "observability" / "traces"
+
+    try:
+        candidate.relative_to(storage_root)
+    except ValueError:
+        return storage_root / "observability" / "traces"
+    return candidate
+
+
+def get_observability_max_field_chars() -> int:
+    return _get_int_env("OBSERVABILITY_MAX_FIELD_CHARS", 1000)
+
+
+def get_observability_max_jsonl_bytes_per_event() -> int:
+    return _get_int_env("OBSERVABILITY_MAX_JSONL_BYTES_PER_EVENT", 20000)
+
+
 def get_public_api_base_url() -> str | None:
     configured = get_env("PUBLIC_API_BASE_URL")
     if configured is None:

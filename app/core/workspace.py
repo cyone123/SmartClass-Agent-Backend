@@ -37,6 +37,12 @@ from app.config import (
     get_workspace_execution_backend,
 )
 from app.core.progress import emit_progress
+from app.core.observability import (
+    categorize_error,
+    observation_sink_from_config,
+    record_metric,
+    run_context_from_config,
+)
 
 DEFAULT_EXECUTION_TIMEOUT_SECONDS = 30
 MAX_EXECUTION_OUTPUT_CHARS = 12000
@@ -805,6 +811,14 @@ def create_workspace_execution_backend() -> ExecutionBackend:
     )
 
 
+def _workspace_backend_name(backend: ExecutionBackend) -> str:
+    if isinstance(backend, LocalSubprocessExecutionBackend):
+        return "local"
+    if isinstance(backend, DaytonaExecutionBackend):
+        return "daytona"
+    return backend.__class__.__name__
+
+
 class WorkspaceManager:
     def __init__(self, backend: ExecutionBackend | None = None) -> None:
         self.backend = backend or create_workspace_execution_backend()
@@ -929,30 +943,95 @@ class WorkspaceManager:
         language: Literal["python", "node"],
         entrypoint: str,
     ) -> WorkspaceExecutionResult:
-        if language not in SUPPORTED_WORKSPACE_LANGUAGES:
-            raise WorkspaceValidationError(
-                f"Unsupported workspace language '{language}'. "
-                f"Supported languages: {', '.join(sorted(SUPPORTED_WORKSPACE_LANGUAGES))}"
+        started_at = time.perf_counter()
+        context = run_context_from_config(config).with_agent("workspace")
+        sink = observation_sink_from_config(config)
+        backend_type = _workspace_backend_name(self.backend)
+        try:
+            if language not in SUPPORTED_WORKSPACE_LANGUAGES:
+                raise WorkspaceValidationError(
+                    f"Unsupported workspace language '{language}'. "
+                    f"Supported languages: {', '.join(sorted(SUPPORTED_WORKSPACE_LANGUAGES))}"
+                )
+
+            paths = get_workspace_paths(config)
+            resolved = _resolve_workspace_path(paths.workspace_root, entrypoint)
+            if not resolved.is_file():
+                raise WorkspaceValidationError(f"Workspace file '{entrypoint}' was not found.")
+
+            source = resolved.read_text(encoding="utf-8")
+            if INSTALLER_COMMAND_PATTERN.search(source):
+                raise WorkspaceValidationError(
+                    "Dependency installation commands are disabled in workspace code. "
+                    "Rely on host-managed dependencies declared in the skill compatibility notes."
+                )
+        except Exception as exc:
+            record_metric(
+                "workspace.code_execution",
+                context=context,
+                sink=sink,
+                status="failed",
+                duration_ms=int((time.perf_counter() - started_at) * 1000),
+                fields={
+                    "tool_name": "run_workspace_code",
+                    "language": language,
+                    "entrypoint": entrypoint,
+                    "workspace_backend": backend_type,
+                    "validation_phase": True,
+                    "error_category": categorize_error(exc),
+                    "error_type": exc.__class__.__name__,
+                    "error_message": str(exc),
+                },
             )
+            raise
 
-        paths = get_workspace_paths(config)
-        resolved = _resolve_workspace_path(paths.workspace_root, entrypoint)
-        if not resolved.is_file():
-            raise WorkspaceValidationError(f"Workspace file '{entrypoint}' was not found.")
-
-        source = resolved.read_text(encoding="utf-8")
-        if INSTALLER_COMMAND_PATTERN.search(source):
-            raise WorkspaceValidationError(
-                "Dependency installation commands are disabled in workspace code. "
-                "Rely on host-managed dependencies declared in the skill compatibility notes."
+        try:
+            result = self.backend.execute(
+                language=language,
+                entrypoint=resolved,
+                paths=paths,
+                config=config,
             )
+        except Exception as exc:
+            record_metric(
+                "workspace.code_execution",
+                context=context,
+                sink=sink,
+                status="failed",
+                duration_ms=int((time.perf_counter() - started_at) * 1000),
+                fields={
+                    "tool_name": "run_workspace_code",
+                    "language": language,
+                    "entrypoint": entrypoint,
+                    "workspace_backend": backend_type,
+                    "error_category": categorize_error(exc),
+                    "error_type": exc.__class__.__name__,
+                    "error_message": str(exc),
+                },
+            )
+            raise
 
-        return self.backend.execute(
-            language=language,
-            entrypoint=resolved,
-            paths=paths,
-            config=config,
+        status = "failed" if result.exit_code != 0 or result.timed_out else "success"
+        record_metric(
+            "workspace.code_execution",
+            context=context,
+            sink=sink,
+            status=status,
+            duration_ms=int((time.perf_counter() - started_at) * 1000),
+            fields={
+                "tool_name": "run_workspace_code",
+                "language": result.language,
+                "entrypoint": result.entrypoint,
+                "workspace_backend": backend_type,
+                "exit_code": result.exit_code,
+                "timed_out": result.timed_out,
+                "output_file_count": len(result.output_files),
+                "stdout_size": len(result.stdout or ""),
+                "stderr_size": len(result.stderr or ""),
+                "error_category": "timeout" if result.timed_out else None,
+            },
         )
+        return result
 
 
 class WorkspaceToolset:

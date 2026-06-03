@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import mimetypes
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Literal
@@ -12,6 +13,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_file_storage_root
+from app.core.observability import ObservationSink, RunContext, record_metric
 from app.core.storage import build_storage_key, get_storage_service
 from app.models.file import ArtifactFile
 from app.services.file_service import ensure_plan_exists, ensure_thread_belongs_to_plan
@@ -368,7 +370,10 @@ async def mark_artifact_ready(
     *,
     output_path: str | Path,
     title: str | None = None,
+    run_context: RunContext | None = None,
+    observation_sink: ObservationSink | None = None,
 ) -> ArtifactFile:
+    started_at = time.perf_counter()
     source_path = Path(output_path)
     if not source_path.exists() or not source_path.is_file():
         raise FileNotFoundError(f"Artifact output file not found: {source_path}")
@@ -419,6 +424,21 @@ async def mark_artifact_ready(
     artifact.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(artifact)
+    if run_context is not None:
+        record_metric(
+            "artifact.mark_ready",
+            context=run_context,
+            sink=observation_sink,
+            status="success",
+            duration_ms=int((time.perf_counter() - started_at) * 1000),
+            fields={
+                "artifact_type": artifact.artifact_type,
+                "artifact_id": artifact.id,
+                "revision_number": artifact.revision_number,
+                "size_bytes": artifact.size_bytes,
+                "storage_backend": artifact.storage_backend,
+            },
+        )
     return artifact
 
 
@@ -427,12 +447,30 @@ async def mark_artifact_failed(
     artifact: ArtifactFile,
     *,
     error_message: str,
+    run_context: RunContext | None = None,
+    observation_sink: ObservationSink | None = None,
 ) -> ArtifactFile:
+    started_at = time.perf_counter()
     artifact.status = ARTIFACT_STATUS_FAILED
     artifact.error_message = error_message[:MAX_ERROR_MESSAGE_LENGTH]
     artifact.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(artifact)
+    if run_context is not None:
+        record_metric(
+            "artifact.mark_failed",
+            context=run_context,
+            sink=observation_sink,
+            status="failed",
+            duration_ms=int((time.perf_counter() - started_at) * 1000),
+            fields={
+                "artifact_type": artifact.artifact_type,
+                "artifact_id": artifact.id,
+                "revision_number": artifact.revision_number,
+                "error_category": "artifact_error",
+                "error_message": error_message,
+            },
+        )
     return artifact
 
 

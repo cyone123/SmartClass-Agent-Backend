@@ -457,6 +457,7 @@ def test_workspace_backend_decodes_non_utf8_process_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("FILE_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setenv("WORKSPACE_EXECUTION_BACKEND", "local")
     manager = WorkspaceManager()
     manager.write_file(
         _config(),

@@ -37,12 +37,19 @@ def _get_timeout_seconds() -> float | None:
     return timeout_ms / 1000
 
 
+def _stream_usage_kwargs(streaming: bool) -> dict[str, bool]:
+    if not streaming:
+        return {}
+    return {"stream_usage": True}
+
+
 def get_model(*, streaming: bool = False) -> ChatOpenAI:
     return ChatOpenAI(
         model=os.getenv("MODEL"),
         api_key=os.getenv("API_KEY"),
         base_url=os.getenv("BASE_URL"),
         streaming=streaming,
+        **_stream_usage_kwargs(streaming),
     )
 
 
@@ -53,6 +60,7 @@ def get_structured_output_model(*, streaming: bool = False) -> ChatOpenAI:
         base_url=os.getenv("STRUCTED_BASE_URL"),
         streaming=streaming,
         timeout=_get_timeout_seconds(),
+        **_stream_usage_kwargs(streaming),
     )
 
 
@@ -62,6 +70,7 @@ def get_small_model(*, streaming: bool = False) -> ChatOpenAI:
         api_key=os.getenv("SMALL_API_KEY"),
         base_url=os.getenv("SMALL_BASE_URL"),
         streaming=streaming,
+        **_stream_usage_kwargs(streaming),
     )
 
 def get_suggestion_model(*, streaming: bool = False) -> ChatOpenAI:
@@ -70,6 +79,7 @@ def get_suggestion_model(*, streaming: bool = False) -> ChatOpenAI:
         api_key=os.getenv("SUGGESTION_API_KEY"),
         base_url=os.getenv("SUGGESTION_BASE_URL"),
         streaming=streaming,
+        **_stream_usage_kwargs(streaming),
     )
 
 
@@ -98,6 +108,7 @@ def get_memory_model(*, streaming: bool = False) -> ChatOpenAI:
         ),
         streaming=streaming,
         timeout=_get_timeout_seconds(),
+        **_stream_usage_kwargs(streaming),
     )
 
 
@@ -108,6 +119,7 @@ def get_structured_fast_model(*, streaming: bool = False) -> ChatOpenAI:
         base_url=_first_non_empty_env("STRUCTURED_FAST_BASE_URL", "SMALL_BASE_URL", "STRUCTED_BASE_URL"),
         streaming=streaming,
         timeout=_get_timeout_seconds(),
+        **_stream_usage_kwargs(streaming),
     )
 
 

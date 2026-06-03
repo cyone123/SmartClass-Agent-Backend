@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -35,6 +36,19 @@ from app.core.memory import (
     reflect_profile_memory,
     search_memory_items,
     with_memory_context_messages,
+)
+from app.core.observability import (
+    ObservationSink,
+    RunContext,
+    categorize_error,
+    extract_token_usage,
+    get_observation_sink,
+    observe_llm_call,
+    observation_sink_from_config,
+    record_metric,
+    run_context_from_config,
+    sanitize_observation_fields,
+    trace_span,
 )
 from app.core.progress import emit_progress
 from app.core.rag import RagRuntime
@@ -148,21 +162,25 @@ router = structured_fast_llm.with_structured_output(
     ConversationRoute,
     method=STRUCTURED_METHOD,
     strict=STRUCTURED_STRICT,
+    include_raw=True,
 )
 router_fallback = structured_output_llm.with_structured_output(
     ConversationRoute,
     method=STRUCTURED_METHOD,
     strict=STRUCTURED_STRICT,
+    include_raw=True,
 )
 metadata_extractor = structured_fast_llm.with_structured_output(
     TeachingMetadata,
     method=STRUCTURED_METHOD,
     strict=STRUCTURED_STRICT,
+    include_raw=True,
 )
 metadata_extractor_fallback = structured_output_llm.with_structured_output(
     TeachingMetadata,
     method=STRUCTURED_METHOD,
     strict=STRUCTURED_STRICT,
+    include_raw=True,
 )
 
 
@@ -280,7 +298,7 @@ def _message_to_text(message: AIMessage | HumanMessage) -> str:
 
 
 def _to_prompt_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def _structured_model_name(model: Any) -> str:
@@ -322,8 +340,113 @@ def _estimate_output_size(response: Any) -> int:
     if isinstance(response, BaseModel):
         return len(response.model_dump_json())
     if isinstance(response, Mapping):
-        return len(_to_prompt_json(dict(response)))
+        return len(_to_prompt_json(sanitize_observation_fields(dict(response))))
     return len(str(response))
+
+
+def _parsed_structured_response(response: Any) -> Any:
+    if isinstance(response, Mapping) and "parsed" in response:
+        return response["parsed"]
+    return response
+
+
+def _get_run_context(config: RunnableConfig | None, *, default_run_id: str = "graph") -> RunContext:
+    configurable = config.get("configurable") if isinstance(config, dict) else None
+    if isinstance(configurable, dict) and isinstance(configurable.get("run_context"), RunContext):
+        return configurable["run_context"]
+    return run_context_from_config(config, default_run_id=default_run_id).with_agent("main_graph")
+
+
+def _get_observation_sink(config: RunnableConfig | None) -> ObservationSink:
+    return observation_sink_from_config(config)
+
+
+def _safe_json_size(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False, default=str))
+    except Exception:
+        return len(str(value))
+
+
+def _graph_node_summary(
+    node_name: str,
+    state: TeachingAssistantState,
+    result: Any | None = None,
+) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "node_name": node_name,
+        "input_size": _safe_json_size(
+            {
+                "keys": sorted(state.keys()),
+                "message_count": len(state.get("messages", []) or []),
+                "plan_id": state.get("plan_id"),
+            }
+        ),
+    }
+    if result is not None:
+        fields["output_size"] = _safe_json_size(result)
+    if node_name == "intent_router_node":
+        intent = result.get("intent") if isinstance(result, Mapping) else state.get("intent")
+        if intent:
+            fields["intent"] = intent
+    elif node_name == "metadata_structer_node":
+        metadata = result.get("teaching_metadata") if isinstance(result, Mapping) else state.get("teaching_metadata")
+        if isinstance(metadata, Mapping):
+            fields["metadata_complete"] = bool(metadata.get("is_complete"))
+            fields["metadata_fields"] = sorted(metadata.keys())
+    elif node_name == "rag_retrieval_node":
+        rag_results = result.get("rag_results") if isinstance(result, Mapping) else state.get("rag_results")
+        fields["rag_result_count"] = len(rag_results or [])
+    elif node_name == "artifact_revision_router_node":
+        update = getattr(result, "update", None)
+        target_source = update if isinstance(update, Mapping) else result if isinstance(result, Mapping) else state
+        targets = target_source.get("revision_targets") if isinstance(target_source, Mapping) else None
+        fields["selected_artifact_types"] = [
+            str(item.get("type") or "") for item in (targets or []) if isinstance(item, Mapping)
+        ]
+    elif node_name == "artifact_fan_in_node":
+        results = result.get("revision_results") if isinstance(result, Mapping) else state.get("revision_results")
+        fields["artifact_result_count"] = len(results or [])
+    return fields
+
+
+def _observed_graph_node(node_name: str, func: Callable[..., Any]) -> Callable[..., Any]:
+    if inspect.iscoroutinefunction(func):
+        async def async_wrapper(
+            state: TeachingAssistantState,
+            config: Optional[RunnableConfig] = None,
+        ):
+            context = _get_run_context(config)
+            sink = _get_observation_sink(config)
+            with trace_span(
+                f"graph.node.{node_name}",
+                context=context,
+                sink=sink,
+                fields=_graph_node_summary(node_name, state),
+            ) as span_fields:
+                result = await func(state, config)
+                span_fields.update(_graph_node_summary(node_name, state, result))
+                return result
+
+        return async_wrapper
+
+    def sync_wrapper(
+        state: TeachingAssistantState,
+        config: Optional[RunnableConfig] = None,
+    ):
+        context = _get_run_context(config)
+        sink = _get_observation_sink(config)
+        with trace_span(
+            f"graph.node.{node_name}",
+            context=context,
+            sink=sink,
+            fields=_graph_node_summary(node_name, state),
+        ) as span_fields:
+            result = func(state, config)
+            span_fields.update(_graph_node_summary(node_name, state, result))
+            return result
+
+    return sync_wrapper
 
 
 def _register_schema_call(schema_name: str) -> tuple[str, int]:
@@ -355,29 +478,41 @@ def _log_structured_call(
     response: Any,
     validation_success: bool,
     is_fallback: bool,
+    config: Optional[RunnableConfig] = None,
     error: Exception | None = None,
 ) -> None:
     schema_phase, schema_invocation_index = _register_schema_call(schema_name)
-    payload = {
-        "event": "structured_output_latency",
+    fields = {
         "schema_name": schema_name,
         "schema_phase": schema_phase,
         "schema_invocation_index": schema_invocation_index,
         "model": _structured_model_name(model),
-        "base_url": _structured_base_url(model),
         "provider_tag": _structured_provider_tag(model),
         "structured_method": STRUCTURED_METHOD,
         "strict": STRUCTURED_STRICT,
-        "duration_ms": round(duration_ms, 2),
         "input_message_count": len(messages),
-        "estimated_input_chars_or_tokens": _estimate_input_size(messages),
+        "input_size": _estimate_input_size(messages),
         "output_chars": _estimate_output_size(response),
         "validation_success": validation_success,
         "is_fallback": is_fallback,
+        **extract_token_usage(response),
     }
     if error is not None:
-        payload["error"] = str(error)
-    print(f"[structured_output] {json.dumps(payload, ensure_ascii=False)}")
+        fields.update(
+            {
+                "error_category": "model_error",
+                "error_type": error.__class__.__name__,
+                "error_message": str(error),
+            }
+        )
+    record_metric(
+        "llm.structured_output",
+        context=_get_run_context(config),
+        sink=_get_observation_sink(config),
+        status="success" if validation_success else "failed",
+        duration_ms=int(duration_ms),
+        fields=fields,
+    )
 
 
 def _invoke_structured_runnable(
@@ -387,6 +522,7 @@ def _invoke_structured_runnable(
     model: Any,
     messages: Sequence[BaseMessage],
     is_fallback: bool,
+    config: Optional[RunnableConfig] = None,
 ) -> Any:
     start_time = time.perf_counter()
     response: Any = None
@@ -398,7 +534,7 @@ def _invoke_structured_runnable(
             **_build_structured_invoke_kwargs(schema_name, model),
         )
         validation_success = True
-        return response
+        return _parsed_structured_response(response)
     except Exception as exc:
         error = exc
         raise
@@ -411,6 +547,7 @@ def _invoke_structured_runnable(
             response=response,
             validation_success=validation_success,
             is_fallback=is_fallback,
+            config=config,
             error=error,
         )
 
@@ -423,6 +560,7 @@ def _invoke_structured_with_fallback(
     messages: Sequence[BaseMessage],
     fallback_runnable: Any | None = None,
     fallback_model: Any | None = None,
+    config: Optional[RunnableConfig] = None,
 ) -> Any:
     try:
         return _invoke_structured_runnable(
@@ -431,6 +569,7 @@ def _invoke_structured_with_fallback(
             model=primary_model,
             messages=messages,
             is_fallback=False,
+            config=config,
         )
     except Exception:
         if not is_structured_fallback_enabled() or fallback_runnable is None or fallback_model is None:
@@ -441,6 +580,7 @@ def _invoke_structured_with_fallback(
             model=fallback_model,
             messages=messages,
             is_fallback=True,
+            config=config,
         )
 
 
@@ -678,6 +818,7 @@ def intent_router_node(
             messages=_build_intent_router_messages(state),
             fallback_runnable=router_fallback,
             fallback_model=structured_output_llm,
+            config=config,
         )
         detail_by_intent = {
             "normal_chat": "识别为普通对话",
@@ -736,15 +877,19 @@ async def _experience_memory_retrieval_update(
     runtime: Runtime[MemoryRuntimeContext],
     *,
     goto: str,
+    config: Optional[RunnableConfig] = None,
 ):
-    context, memories = await choose_relevant_experience_memories(
+    run_context = run_context_from_config(config, default_run_id="memory").with_agent("memory")
+    memory_context, memories = await choose_relevant_experience_memories(
         store=_runtime_store(runtime),
         user_id=_runtime_user_id(runtime),
         state=state,
+        run_context=run_context,
+        observation_sink=observation_sink_from_config(config),
     )
     return Command(
         update={
-            "experience_memory_context": context,
+            "experience_memory_context": memory_context,
             "loaded_experience_memories": memories,
         },
         goto=goto,
@@ -753,56 +898,68 @@ async def _experience_memory_retrieval_update(
 
 async def normal_chat_memory_retrieval_node(
     state: TeachingAssistantState,
-    runtime: Runtime[MemoryRuntimeContext],
+    config: Optional[RunnableConfig] = None,
+    runtime: Runtime[MemoryRuntimeContext] | None = None,
 ):
     return await _experience_memory_retrieval_update(
         state,
         runtime,
         goto="normal_chat_node",
+        config=config,
     )
 
 
 async def teaching_plan_memory_retrieval_node(
     state: TeachingAssistantState,
-    runtime: Runtime[MemoryRuntimeContext],
+    config: Optional[RunnableConfig] = None,
+    runtime: Runtime[MemoryRuntimeContext] | None = None,
 ):
     return await _experience_memory_retrieval_update(
         state,
         runtime,
         goto="metadata_structer_node",
+        config=config,
     )
 
 
 async def teaching_design_memory_retrieval_node(
     state: TeachingAssistantState,
-    runtime: Runtime[MemoryRuntimeContext],
+    config: Optional[RunnableConfig] = None,
+    runtime: Runtime[MemoryRuntimeContext] | None = None,
 ):
     return await _experience_memory_retrieval_update(
         state,
         runtime,
         goto="teaching_design_planner",
+        config=config,
     )
 
 
 async def artifact_revision_memory_retrieval_node(
     state: TeachingAssistantState,
-    runtime: Runtime[MemoryRuntimeContext],
+    config: Optional[RunnableConfig] = None,
+    runtime: Runtime[MemoryRuntimeContext] | None = None,
 ):
     return await _experience_memory_retrieval_update(
         state,
         runtime,
         goto="artifact_revision_router_node",
+        config=config,
     )
 
 
 async def profile_memory_reflection_node(
     state: TeachingAssistantState,
-    runtime: Runtime[MemoryRuntimeContext],
+    config: Optional[RunnableConfig] = None,
+    runtime: Runtime[MemoryRuntimeContext] | None = None,
 ):
+    context = run_context_from_config(config, default_run_id="memory").with_agent("memory")
     await reflect_profile_memory(
         store=_runtime_store(runtime),
         user_id=_runtime_user_id(runtime),
         state=state,
+        run_context=context,
+        observation_sink=observation_sink_from_config(config),
     )
     goto = state.get("memory_reflection_goto") or "experience_memory_reflection_node"
     return Command(update={"memory_reflection_goto": None}, goto=goto)
@@ -815,25 +972,38 @@ async def experience_memory_reflection_node(
 ):
     configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
     thread_id = str(configurable.get("thread_id") or "").strip() or None
+    context = run_context_from_config(config, default_run_id="memory").with_agent("memory")
     await reflect_experience_memory(
         store=_runtime_store(runtime),
         user_id=_runtime_user_id(runtime),
         state=state,
         thread_id=thread_id,
         plan_id=state.get("plan_id"),
+        run_context=context,
+        observation_sink=observation_sink_from_config(config),
     )
     return {}
 
 
-async def normal_chat_node(state: TeachingAssistantState):
+async def normal_chat_node(
+    state: TeachingAssistantState,
+    config: Optional[RunnableConfig] = None,
+):
     system_prompt="""
     你是一个面向老师备课与教学设计的智能助手，可以回答日常问题，或者帮助老师进行备课与教学设计。
     当用户问你有什么能力的时候，参考这样的回答：
     “我可以帮助你查资料、整理知识点、设计教学目标、撰写教案、制作PPT、设计生成课堂互动内容等。
     你可以上传本地知识库，或者上传附件供我分析，支持pdf，docx，视频的分析。也支持语音输入。”
     """
-    response = await llm.ainvoke(
-        [SystemMessage(content=system_prompt)] + with_memory_context_messages(state)
+    messages = [SystemMessage(content=system_prompt)] + with_memory_context_messages(state)
+    response = await observe_llm_call(
+        "llm.call",
+        lambda: llm.ainvoke(messages),
+        context=run_context_from_config(config).with_agent("main_graph"),
+        sink=observation_sink_from_config(config),
+        model=llm,
+        messages=messages,
+        fields={"node": "normal_chat_node"},
     )
     return {
         "messages": [response],
@@ -854,6 +1024,7 @@ def metadata_structer_node(
             messages=build_metadata_extraction_messages(state),
             fallback_runnable=metadata_extractor_fallback,
             fallback_model=structured_output_llm,
+            config=config,
         )
         if reporter:
             reporter.emit(
@@ -894,10 +1065,28 @@ async def warmup_structured_output_schemas() -> None:
                 messages=messages,
                 fallback_runnable=fallback_runnable,
                 fallback_model=fallback_model,
+                config=None,
             )
-            print(f"[structured_output_warmup] schema={schema_name} success=true")
+            record_metric(
+                "llm.structured_output.warmup",
+                context=RunContext(run_id="warmup", agent_name="main_graph"),
+                sink=get_observation_sink(),
+                status="success",
+                fields={"schema_name": schema_name},
+            )
         except Exception as exc:
-            print(f"[structured_output_warmup] schema={schema_name} success=false error={exc}")
+            record_metric(
+                "llm.structured_output.warmup",
+                context=RunContext(run_id="warmup", agent_name="main_graph"),
+                sink=get_observation_sink(),
+                status="failed",
+                fields={
+                    "schema_name": schema_name,
+                    "error_category": "model_error",
+                    "error_type": exc.__class__.__name__,
+                    "error_message": str(exc),
+                },
+            )
 
     await asyncio.gather(
         _warmup_schema(
@@ -939,13 +1128,25 @@ def metadata_completion_condition(state: TeachingAssistantState):
     return "follow_up_questioner"
 
 
-async def follow_up_questioner(state: TeachingAssistantState):
+async def follow_up_questioner(
+    state: TeachingAssistantState,
+    config: Optional[RunnableConfig] = None,
+):
     system_prompt = (
         "你是教学助手中的主动追问节点。"
         "当教学要素不完整时，请基于当前缺失信息提出一个自然、简洁、关键的补充问题。"
         f"\n当前教学要素：{state.get('teaching_metadata')}"
     )
-    response = await llm.ainvoke([SystemMessage(content=system_prompt)])
+    messages = [SystemMessage(content=system_prompt)]
+    response = await observe_llm_call(
+        "llm.call",
+        lambda: llm.ainvoke(messages),
+        context=run_context_from_config(config).with_agent("main_graph"),
+        sink=observation_sink_from_config(config),
+        model=llm,
+        messages=messages,
+        fields={"node": "follow_up_questioner"},
+    )
     return {
         "messages": [response],
         "memory_reflection_goto": INTERRUPT_FOR_USERINPUT_NODE,
@@ -992,8 +1193,15 @@ async def teaching_design_planner(
         f"RAG 上下文：{state.get('rag_context', '')}"
     )
     try:
-        response = await llm.ainvoke(
-            [SystemMessage(content=system_prompt)] + with_memory_context_messages(state)
+        messages = [SystemMessage(content=system_prompt)] + with_memory_context_messages(state)
+        response = await observe_llm_call(
+            "llm.call",
+            lambda: llm.ainvoke(messages),
+            context=run_context_from_config(config).with_agent("main_graph"),
+            sink=observation_sink_from_config(config),
+            model=llm,
+            messages=messages,
+            fields={"node": "teaching_design_planner"},
         )
         if reporter:
             reporter.emit("teaching_design", "success", detail="已生成教学设计方案")
@@ -1240,7 +1448,38 @@ def build_agent_graph(
         reporter = emit_progress(config, "rag_retrieval", "running")
         try:
             query = _build_rag_query(state)
-            result = await rag_runtime.retrieval(query, plan_id=state.get("plan_id"))
+            rag_started_at = time.perf_counter()
+            try:
+                result = await rag_runtime.retrieval(query, plan_id=state.get("plan_id"))
+            except Exception as exc:
+                record_metric(
+                    "rag.retrieve",
+                    context=_get_run_context(config),
+                    sink=_get_observation_sink(config),
+                    status="failed",
+                    duration_ms=int((time.perf_counter() - rag_started_at) * 1000),
+                    fields={
+                        "plan_id": state.get("plan_id"),
+                        "query_size": len(query),
+                        "result_count": 0,
+                        "error_category": "rag_error",
+                        "error_type": exc.__class__.__name__,
+                        "error_message": str(exc),
+                    },
+                )
+                raise
+            record_metric(
+                "rag.retrieve",
+                context=_get_run_context(config),
+                sink=_get_observation_sink(config),
+                status="success",
+                duration_ms=int((time.perf_counter() - rag_started_at) * 1000),
+                fields={
+                    "plan_id": state.get("plan_id"),
+                    "query_size": len(query),
+                    "result_count": len(result),
+                },
+            )
             rag_results = [
                 {
                     "page_content": document.page_content,
@@ -1266,7 +1505,7 @@ def build_agent_graph(
         context_schema=MemoryRuntimeContext,
     )
     agent_builder.add_node("profile_memory_load_node", profile_memory_load_node)
-    agent_builder.add_node("intent_router_node", intent_router_node)
+    agent_builder.add_node("intent_router_node", _observed_graph_node("intent_router_node", intent_router_node))
     agent_builder.add_node("normal_chat_memory_retrieval_node", normal_chat_memory_retrieval_node)
     agent_builder.add_node("teaching_plan_memory_retrieval_node", teaching_plan_memory_retrieval_node)
     agent_builder.add_node("teaching_design_memory_retrieval_node", teaching_design_memory_retrieval_node)
@@ -1274,14 +1513,14 @@ def build_agent_graph(
     agent_builder.add_node("normal_chat_node", normal_chat_node)
     agent_builder.add_node("profile_memory_reflection_node", profile_memory_reflection_node)
     agent_builder.add_node("experience_memory_reflection_node", experience_memory_reflection_node)
-    agent_builder.add_node("metadata_structer_node", metadata_structer_node)
+    agent_builder.add_node("metadata_structer_node", _observed_graph_node("metadata_structer_node", metadata_structer_node))
     agent_builder.add_node("follow_up_questioner", follow_up_questioner)
     agent_builder.add_node(INTERRUPT_FOR_USERINPUT_NODE, interrupt_for_userinput)
     agent_builder.add_node(METADATA_REVIEW_INTERRUPT_NODE, metadata_review_interrupt_node)
-    agent_builder.add_node("rag_retrieval_node", rag_retrieval_node)
-    agent_builder.add_node("teaching_design_planner", teaching_design_planner)
+    agent_builder.add_node("rag_retrieval_node", _observed_graph_node("rag_retrieval_node", rag_retrieval_node))
+    agent_builder.add_node("teaching_design_planner", _observed_graph_node("teaching_design_planner", teaching_design_planner))
     agent_builder.add_node(TEACHING_PLAN_REVIEW_INTERRUPT_NODE, teaching_plan_review_interrupt_node)
-    agent_builder.add_node("artifact_revision_router_node", artifact_revision_router_node)
+    agent_builder.add_node("artifact_revision_router_node", _observed_graph_node("artifact_revision_router_node", artifact_revision_router_node))
     agent_builder.add_node(ARTIFACT_REVISION_CLARIFICATION_NODE, artifact_revision_clarification_interrupt_node)
     agent_builder.add_node("ppt_generate_node", ppt_generate_node)
     agent_builder.add_node("docx_generate_node", docx_generate_node)
@@ -1289,7 +1528,7 @@ def build_agent_graph(
     agent_builder.add_node("ppt_revision_node", ppt_revision_node)
     agent_builder.add_node("docx_revision_node", docx_revision_node)
     agent_builder.add_node("html_game_revision_node", html_revision_node)
-    agent_builder.add_node("artifact_fan_in_node", artifact_fan_in_node)
+    agent_builder.add_node("artifact_fan_in_node", _observed_graph_node("artifact_fan_in_node", artifact_fan_in_node))
 
     agent_builder.add_edge(START, "profile_memory_load_node")
     agent_builder.add_edge("profile_memory_load_node", "intent_router_node")
