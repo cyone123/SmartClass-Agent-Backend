@@ -28,6 +28,13 @@ def _get_int_env(name: str, default: int) -> int:
     return int(value)
 
 
+def _get_float_env(name: str, default: float) -> float:
+    value = get_env(name)
+    if value is None or not value.strip():
+        return default
+    return float(value)
+
+
 def get_db_uri() -> str:
     database_url = get_env("DATABASE_URL") or get_env("POSTGRES_URL")
     if database_url:
@@ -99,6 +106,80 @@ def get_observability_max_field_chars() -> int:
 
 def get_observability_max_jsonl_bytes_per_event() -> int:
     return _get_int_env("OBSERVABILITY_MAX_JSONL_BYTES_PER_EVENT", 20000)
+
+
+def get_otel_enabled() -> bool:
+    return _get_bool_env("OTEL_ENABLED", False)
+
+
+def get_otel_service_name() -> str:
+    return (get_env("OTEL_SERVICE_NAME", "smartclass-backend") or "smartclass-backend").strip()
+
+
+def get_otel_environment() -> str:
+    return (
+        get_env("OTEL_RESOURCE_ATTRIBUTES_DEPLOYMENT_ENVIRONMENT")
+        or get_env("DEPLOYMENT_ENVIRONMENT")
+        or get_env("ENVIRONMENT")
+        or "local"
+    ).strip()
+
+
+def get_otel_endpoint() -> str | None:
+    configured = (
+        get_env("OTEL_EXPORTER_OTLP_ENDPOINT")
+        or get_env("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+        or get_env("OTEL_OTLP_ENDPOINT")
+    )
+    if configured is None:
+        return None
+    normalized = configured.strip().rstrip("/")
+    return normalized or None
+
+
+def get_otel_protocol() -> str:
+    return (
+        get_env("OTEL_EXPORTER_OTLP_PROTOCOL")
+        or get_env("OTEL_OTLP_PROTOCOL")
+        or "http/protobuf"
+    ).strip().lower()
+
+
+def get_otel_sample_ratio() -> float:
+    value = _get_float_env("OTEL_TRACES_SAMPLER_ARG", 1.0)
+    if value < 0:
+        return 0.0
+    if value > 1:
+        return 1.0
+    return value
+
+
+def get_otel_insecure() -> bool:
+    return _get_bool_env("OTEL_EXPORTER_OTLP_INSECURE", True)
+
+
+def get_prometheus_enabled() -> bool:
+    return _get_bool_env("PROMETHEUS_ENABLED", False)
+
+
+def get_prometheus_metrics_path() -> str:
+    configured = (get_env("PROMETHEUS_METRICS_PATH", "/metrics") or "/metrics").strip()
+    if not configured.startswith("/"):
+        configured = f"/{configured}"
+    return configured
+
+
+def get_prometheus_histogram_buckets() -> tuple[float, ...]:
+    raw = get_env("PROMETHEUS_HISTOGRAM_BUCKETS")
+    if raw:
+        buckets = tuple(sorted(float(item.strip()) for item in raw.split(",") if item.strip()))
+        if buckets:
+            return buckets
+    return (0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0)
+
+
+def get_prometheus_export_mode() -> str:
+    return (get_env("PROMETHEUS_EXPORT_MODE", "endpoint") or "endpoint").strip().lower()
 
 
 def get_public_api_base_url() -> str | None:

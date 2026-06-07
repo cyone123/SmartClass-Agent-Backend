@@ -13,12 +13,17 @@ from typing import Any, Literal, Mapping, Protocol
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.config import (
+    get_otel_enabled,
+    get_otel_environment,
+    get_otel_service_name,
     get_observability_enabled,
     get_observability_log_level,
     get_observability_max_field_chars,
     get_observability_max_jsonl_bytes_per_event,
     get_observability_trace_jsonl_dir,
     get_observability_trace_jsonl_enabled,
+    get_prometheus_enabled,
+    get_prometheus_histogram_buckets,
 )
 
 ObservationKind = Literal["log", "span", "metric"]
@@ -150,6 +155,250 @@ class CompositeObservationSink:
                 )
 
 
+class OpenTelemetryObservationSink:
+    def __init__(self) -> None:
+        try:
+            from opentelemetry import trace
+            from opentelemetry.trace import Status, StatusCode
+        except ImportError as exc:  # pragma: no cover - dependency guard
+            raise RuntimeError("OpenTelemetry packages are required when OTEL_ENABLED=true.") from exc
+
+        self._trace = trace
+        self._status_cls = Status
+        self._status_code_cls = StatusCode
+        self._tracer = trace.get_tracer("smartclass.observability")
+
+    def emit(self, event: ObservationEvent) -> None:
+        sanitized = _sanitize_event(event)
+        attributes = _otel_attributes(sanitized)
+        span_name = _normalize_label_value(sanitized.event)
+        with self._tracer.start_as_current_span(span_name, attributes=attributes) as span:
+            if sanitized.status == "failed":
+                span.set_status(
+                    self._status_cls(
+                        self._status_code_cls.ERROR,
+                        str(sanitized.fields.get("error_message") or sanitized.event),
+                    )
+                )
+
+
+class PrometheusObservationSink:
+    def __init__(self, *, registry: Any | None = None) -> None:
+        try:
+            from prometheus_client import Counter, Gauge, Histogram
+            from prometheus_client.registry import REGISTRY
+        except ImportError as exc:  # pragma: no cover - dependency guard
+            raise RuntimeError("prometheus-client is required when PROMETHEUS_ENABLED=true.") from exc
+
+        self._registry = registry or REGISTRY
+        buckets = get_prometheus_histogram_buckets()
+        self._event_total = _get_or_create_prom_metric(
+            "smartclass_observation_events_total",
+            Counter,
+            "SmartClass observation events.",
+            ("event", "kind", "status", "error_category", "agent_name"),
+            registry=self._registry,
+        )
+        self._event_duration = _get_or_create_prom_metric(
+            "smartclass_observation_duration_seconds",
+            Histogram,
+            "SmartClass observation event duration.",
+            ("event", "kind", "status", "error_category", "agent_name"),
+            registry=self._registry,
+            buckets=buckets,
+        )
+        self._llm_calls = _get_or_create_prom_metric(
+            "smartclass_llm_calls_total",
+            Counter,
+            "SmartClass LLM calls.",
+            ("agent_name", "model", "status", "error_category"),
+            registry=self._registry,
+        )
+        self._llm_duration = _get_or_create_prom_metric(
+            "smartclass_llm_call_duration_seconds",
+            Histogram,
+            "SmartClass LLM call duration.",
+            ("agent_name", "model", "status"),
+            registry=self._registry,
+            buckets=buckets,
+        )
+        self._llm_tokens = _get_or_create_prom_metric(
+            "smartclass_llm_tokens_total",
+            Counter,
+            "SmartClass LLM token usage.",
+            ("model", "token_type"),
+            registry=self._registry,
+        )
+        self._tool_calls = _get_or_create_prom_metric(
+            "smartclass_tool_calls_total",
+            Counter,
+            "SmartClass tool calls.",
+            ("agent_name", "tool_name", "status", "error_category"),
+            registry=self._registry,
+        )
+        self._tool_duration = _get_or_create_prom_metric(
+            "smartclass_tool_call_duration_seconds",
+            Histogram,
+            "SmartClass tool call duration.",
+            ("agent_name", "tool_name", "status"),
+            registry=self._registry,
+            buckets=buckets,
+        )
+        self._rag_retrievals = _get_or_create_prom_metric(
+            "smartclass_rag_retrievals_total",
+            Counter,
+            "SmartClass RAG retrievals.",
+            ("status", "error_category"),
+            registry=self._registry,
+        )
+        self._rag_duration = _get_or_create_prom_metric(
+            "smartclass_rag_retrieval_duration_seconds",
+            Histogram,
+            "SmartClass RAG retrieval duration.",
+            ("status",),
+            registry=self._registry,
+            buckets=buckets,
+        )
+        self._artifact_generation = _get_or_create_prom_metric(
+            "smartclass_artifact_generation_total",
+            Counter,
+            "SmartClass artifact generation and revision events.",
+            ("artifact_type", "status", "error_category"),
+            registry=self._registry,
+        )
+        self._file_ingestion = _get_or_create_prom_metric(
+            "smartclass_file_ingestion_total",
+            Counter,
+            "SmartClass file ingestion events.",
+            ("file_kind", "status", "error_category"),
+            registry=self._registry,
+        )
+        self._workspace_execution = _get_or_create_prom_metric(
+            "smartclass_workspace_code_execution_total",
+            Counter,
+            "SmartClass workspace code executions.",
+            ("language", "status", "error_category"),
+            registry=self._registry,
+        )
+        self._storage_operations = _get_or_create_prom_metric(
+            "smartclass_storage_operations_total",
+            Counter,
+            "SmartClass storage operations.",
+            ("operation", "backend", "status", "error_category"),
+            registry=self._registry,
+        )
+        self._active_runs = _get_or_create_prom_metric(
+            "smartclass_active_runs",
+            Gauge,
+            "SmartClass active chat stream runs.",
+            (),
+            registry=self._registry,
+        )
+
+    def emit(self, event: ObservationEvent) -> None:
+        sanitized = _sanitize_event(event)
+        labels = _prometheus_base_labels(sanitized)
+        self._event_total.labels(**labels).inc()
+        if sanitized.duration_ms is not None:
+            self._event_duration.labels(**labels).observe(sanitized.duration_ms / 1000)
+
+        if sanitized.event == "chat.stream.request" and sanitized.status == "running":
+            self._active_runs.inc()
+        elif sanitized.event in {"chat.stream.completed", "chat.stream.failed"}:
+            self._active_runs.dec()
+
+        if sanitized.event.startswith("llm."):
+            self._record_llm(sanitized)
+        elif sanitized.event == "tool.invoke":
+            self._record_tool(sanitized)
+        elif sanitized.event == "rag.retrieve":
+            self._record_rag(sanitized)
+        elif sanitized.event.startswith("artifact.") or "generation" in sanitized.event or "revision" in sanitized.event:
+            self._record_artifact(sanitized)
+        elif sanitized.event.startswith("file.ingestion"):
+            self._record_file_ingestion(sanitized)
+        elif sanitized.event == "workspace.code_execution":
+            self._record_workspace(sanitized)
+        elif sanitized.event.startswith("storage."):
+            self._record_storage(sanitized)
+
+    def _record_llm(self, event: ObservationEvent) -> None:
+        labels = {
+            "agent_name": _safe_prom_label(event.context.agent_name or event.fields.get("agent_name")),
+            "model": _safe_prom_label(event.fields.get("model")),
+            "status": _safe_prom_label(event.status),
+            "error_category": _safe_prom_label(event.fields.get("error_category")),
+        }
+        self._llm_calls.labels(**labels).inc()
+        if event.duration_ms is not None:
+            self._llm_duration.labels(
+                agent_name=labels["agent_name"],
+                model=labels["model"],
+                status=labels["status"],
+            ).observe(event.duration_ms / 1000)
+        for field, token_type in (
+            ("input_tokens", "input"),
+            ("output_tokens", "output"),
+            ("total_tokens", "total"),
+        ):
+            value = event.fields.get(field)
+            if isinstance(value, int):
+                self._llm_tokens.labels(model=labels["model"], token_type=token_type).inc(value)
+
+    def _record_tool(self, event: ObservationEvent) -> None:
+        labels = {
+            "agent_name": _safe_prom_label(event.context.agent_name or event.fields.get("agent_name")),
+            "tool_name": _safe_prom_label(event.fields.get("tool_name")),
+            "status": _safe_prom_label(event.status),
+            "error_category": _safe_prom_label(event.fields.get("error_category")),
+        }
+        self._tool_calls.labels(**labels).inc()
+        if event.duration_ms is not None:
+            self._tool_duration.labels(
+                agent_name=labels["agent_name"],
+                tool_name=labels["tool_name"],
+                status=labels["status"],
+            ).observe(event.duration_ms / 1000)
+
+    def _record_rag(self, event: ObservationEvent) -> None:
+        labels = {
+            "status": _safe_prom_label(event.status),
+            "error_category": _safe_prom_label(event.fields.get("error_category")),
+        }
+        self._rag_retrievals.labels(**labels).inc()
+        if event.duration_ms is not None:
+            self._rag_duration.labels(status=labels["status"]).observe(event.duration_ms / 1000)
+
+    def _record_artifact(self, event: ObservationEvent) -> None:
+        self._artifact_generation.labels(
+            artifact_type=_safe_prom_label(event.fields.get("artifact_type")),
+            status=_safe_prom_label(event.status),
+            error_category=_safe_prom_label(event.fields.get("error_category")),
+        ).inc()
+
+    def _record_file_ingestion(self, event: ObservationEvent) -> None:
+        self._file_ingestion.labels(
+            file_kind=_safe_prom_label(event.fields.get("file_kind")),
+            status=_safe_prom_label(event.status),
+            error_category=_safe_prom_label(event.fields.get("error_category")),
+        ).inc()
+
+    def _record_workspace(self, event: ObservationEvent) -> None:
+        self._workspace_execution.labels(
+            language=_safe_prom_label(event.fields.get("language")),
+            status=_safe_prom_label(event.status),
+            error_category=_safe_prom_label(event.fields.get("error_category")),
+        ).inc()
+
+    def _record_storage(self, event: ObservationEvent) -> None:
+        self._storage_operations.labels(
+            operation=_safe_prom_label(event.fields.get("storage_operation") or event.fields.get("operation")),
+            backend=_safe_prom_label(event.fields.get("storage_backend") or event.fields.get("backend")),
+            status=_safe_prom_label(event.status),
+            error_category=_safe_prom_label(event.fields.get("error_category")),
+        ).inc()
+
+
 def get_observation_sink() -> ObservationSink:
     if not get_observability_enabled():
         return NoopObservationSink()
@@ -157,6 +406,10 @@ def get_observation_sink() -> ObservationSink:
     sinks: list[ObservationSink] = [LoggingObservationSink()]
     if get_observability_trace_jsonl_enabled():
         sinks.append(JsonlTraceSink())
+    if get_otel_enabled():
+        sinks.append(OpenTelemetryObservationSink())
+    if get_prometheus_enabled():
+        sinks.append(PrometheusObservationSink())
     return CompositeObservationSink(sinks)
 
 
@@ -688,3 +941,152 @@ def _coerce_log_level(value: str | None) -> int:
         "WARNING": logging.WARNING,
         "ERROR": logging.ERROR,
     }.get(normalized, logging.INFO)
+
+
+_PROMETHEUS_DISALLOWED_LABEL_KEYS = {
+    "run_id",
+    "thread_id",
+    "user_id",
+    "plan_id",
+    "artifact_id",
+    "attachment_id",
+    "file_id",
+    "filename",
+    "file_name",
+    "original_name",
+    "storage_key",
+    "storage_path",
+    "url",
+    "download_url",
+    "prompt",
+    "completion",
+    "content",
+    "attachment_text",
+    "memory_content",
+}
+
+
+def _otel_attributes(event: ObservationEvent) -> dict[str, str | int | float | bool]:
+    attributes: dict[str, str | int | float | bool] = {
+        "service.name": get_otel_service_name(),
+        "deployment.environment": get_otel_environment(),
+        "smartclass.event": event.event,
+        "smartclass.kind": event.kind,
+    }
+    if event.status:
+        attributes["smartclass.status"] = event.status
+    if event.duration_ms is not None:
+        attributes["smartclass.duration_ms"] = event.duration_ms
+    context_mapping = {
+        "smartclass.run_id": event.context.run_id,
+        "smartclass.thread_id": event.context.thread_id,
+        "smartclass.plan_id": event.context.plan_id,
+        "smartclass.user_id": event.context.user_id,
+        "smartclass.agent_name": event.context.agent_name,
+    }
+    for key, value in context_mapping.items():
+        if value is not None:
+            attributes[key] = value
+
+    for key, value in event.fields.items():
+        attr_key = _otel_attribute_key(key)
+        attr_value = _otel_attribute_value(value)
+        if attr_value is not None:
+            attributes[attr_key] = attr_value
+    return attributes
+
+
+def _otel_attribute_key(key: str) -> str:
+    known = {
+        "model": "llm.model",
+        "input_tokens": "llm.input_tokens",
+        "output_tokens": "llm.output_tokens",
+        "total_tokens": "llm.total_tokens",
+        "tool_name": "tool.name",
+        "artifact_type": "artifact.type",
+        "file_kind": "file.kind",
+        "storage_backend": "storage.backend",
+        "storage_operation": "storage.operation",
+        "error_category": "smartclass.error_category",
+        "error_type": "exception.type",
+        "error_message": "exception.message",
+    }
+    return known.get(key, f"smartclass.{_normalize_attribute_name(key)}")
+
+
+def _otel_attribute_value(value: Any) -> str | int | float | bool | None:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple, set)):
+        return ",".join(str(item) for item in list(value)[:20])
+    if isinstance(value, Mapping):
+        return _json_dumps(value)
+    return str(value)
+
+
+def _normalize_attribute_name(value: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(value).strip())
+    return normalized[:80] or "unknown"
+
+
+def _prometheus_base_labels(event: ObservationEvent) -> dict[str, str]:
+    return {
+        "event": _safe_prom_label(event.event),
+        "kind": _safe_prom_label(event.kind),
+        "status": _safe_prom_label(event.status),
+        "error_category": _safe_prom_label(event.fields.get("error_category")),
+        "agent_name": _safe_prom_label(event.context.agent_name or event.fields.get("agent_name")),
+    }
+
+
+def _safe_prom_label(value: Any) -> str:
+    if value is None or value == "":
+        return "unknown"
+    return _normalize_label_value(str(value))
+
+
+def _normalize_label_value(value: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_.:-]+", "_", str(value).strip())
+    return normalized[:80] or "unknown"
+
+
+def _get_or_create_prom_metric(name: str, metric_cls: Any, documentation: str, labelnames: tuple[str, ...], **kwargs: Any) -> Any:
+    registry = kwargs.get("registry")
+    if registry is not None:
+        existing = getattr(registry, "_names_to_collectors", {}).get(name)
+        if existing is not None:
+            return existing
+    try:
+        return metric_cls(name, documentation, labelnames, **kwargs)
+    except ValueError:
+        if registry is not None:
+            existing = getattr(registry, "_names_to_collectors", {}).get(name)
+            if existing is not None:
+                return existing
+        raise
+
+
+def prometheus_label_keys_for_event(event: ObservationEvent) -> set[str]:
+    """Expose label keys for tests so high-cardinality governance stays explicit."""
+    keys = set(_prometheus_base_labels(event))
+    if event.event.startswith("llm."):
+        keys.update({"model"})
+    elif event.event == "tool.invoke":
+        keys.update({"tool_name"})
+    elif event.event == "rag.retrieve":
+        keys.discard("agent_name")
+    elif event.event.startswith("artifact.") or "generation" in event.event or "revision" in event.event:
+        keys.update({"artifact_type"})
+    elif event.event.startswith("file.ingestion"):
+        keys.update({"file_kind"})
+    elif event.event == "workspace.code_execution":
+        keys.update({"language"})
+    elif event.event.startswith("storage."):
+        keys.update({"operation", "backend"})
+    return keys
+
+
+def assert_prometheus_labels_are_bounded(event: ObservationEvent) -> None:
+    disallowed = prometheus_label_keys_for_event(event) & _PROMETHEUS_DISALLOWED_LABEL_KEYS
+    if disallowed:
+        raise ValueError(f"Prometheus labels include high-cardinality keys: {sorted(disallowed)}")

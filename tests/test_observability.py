@@ -21,11 +21,21 @@ from app.core.auth import get_current_user
 from app.core.observability import (
     JsonlTraceSink,
     ObservationEvent,
+    OpenTelemetryObservationSink,
+    PrometheusObservationSink,
     RunContext,
+    assert_prometheus_labels_are_bounded,
     extract_token_usage,
+    get_observation_sink,
     observe_llm_call,
+    prometheus_label_keys_for_event,
     sanitize_observation_fields,
     trace_span,
+)
+from app.core.observability_bootstrap import (
+    ObservabilityConfigurationError,
+    configure_external_observability,
+    reset_observability_bootstrap_for_tests,
 )
 from app.core.workspace import (
     LocalSubprocessExecutionBackend,
@@ -41,6 +51,12 @@ class MemoryObservationSink:
 
     def emit(self, event: ObservationEvent) -> None:
         self.events.append(event)
+
+
+class FailingObservationSink:
+    def emit(self, event: ObservationEvent) -> None:
+        _ = event
+        raise RuntimeError("sink failed")
 
 
 class StructuredDecision(BaseModel):
@@ -224,6 +240,183 @@ def test_jsonl_trace_truncation_keeps_valid_json(tmp_path: Path, monkeypatch) ->
     payload = json.loads(line)
     assert payload["event"] == "huge.event"
     assert payload["jsonl_truncated"] is True
+
+
+def test_external_observability_config_defaults_and_enabled(monkeypatch) -> None:
+    from app import config
+
+    for name in (
+        "OTEL_ENABLED",
+        "OTEL_SERVICE_NAME",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_PROTOCOL",
+        "OTEL_TRACES_SAMPLER_ARG",
+        "PROMETHEUS_ENABLED",
+        "PROMETHEUS_METRICS_PATH",
+        "PROMETHEUS_HISTOGRAM_BUCKETS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    assert config.get_otel_enabled() is False
+    assert config.get_otel_service_name() == "smartclass-backend"
+    assert config.get_otel_endpoint() is None
+    assert config.get_otel_protocol() == "http/protobuf"
+    assert config.get_otel_sample_ratio() == 1.0
+    assert config.get_prometheus_enabled() is False
+    assert config.get_prometheus_metrics_path() == "/metrics"
+
+    monkeypatch.setenv("OTEL_ENABLED", "true")
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "smartclass-test")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+    monkeypatch.setenv("OTEL_TRACES_SAMPLER_ARG", "0.25")
+    monkeypatch.setenv("PROMETHEUS_ENABLED", "true")
+    monkeypatch.setenv("PROMETHEUS_METRICS_PATH", "internal/metrics")
+    monkeypatch.setenv("PROMETHEUS_HISTOGRAM_BUCKETS", "0.1,1,5")
+
+    assert config.get_otel_enabled() is True
+    assert config.get_otel_service_name() == "smartclass-test"
+    assert config.get_otel_endpoint() == "http://collector:4318"
+    assert config.get_otel_sample_ratio() == 0.25
+    assert config.get_prometheus_enabled() is True
+    assert config.get_prometheus_metrics_path() == "/internal/metrics"
+    assert config.get_prometheus_histogram_buckets() == (0.1, 1.0, 5.0)
+
+
+def test_get_observation_sink_composes_enabled_external_sinks(monkeypatch) -> None:
+    monkeypatch.setenv("OBSERVABILITY_ENABLED", "true")
+    monkeypatch.setenv("OBSERVABILITY_TRACE_JSONL_ENABLED", "false")
+    monkeypatch.setenv("OTEL_ENABLED", "false")
+    monkeypatch.setenv("PROMETHEUS_ENABLED", "true")
+
+    sink = get_observation_sink()
+
+    assert any(isinstance(item, PrometheusObservationSink) for item in sink.sinks)
+
+
+def test_otel_sink_exports_sanitized_attributes(monkeypatch) -> None:
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "smartclass-test")
+    monkeypatch.setenv("DEPLOYMENT_ENVIRONMENT", "test")
+    sink = OpenTelemetryObservationSink()
+
+    sink.emit(
+        ObservationEvent(
+            event="llm.call",
+            kind="metric",
+            context=RunContext(run_id="run-1", thread_id="thread-1", plan_id=1, user_id="2", agent_name="agent"),
+            status="failed",
+            duration_ms=12,
+            fields={
+                "model": "fake-model",
+                "input_tokens": 3,
+                "error_category": "model_error",
+                "error_message": "Bearer secret-token",
+                "storage_path": r"D:\Learn\langchain\demo\backend\.env",
+            },
+        )
+    )
+
+    # The no-op default provider accepts the span. The important contract here is
+    # that emission does not fail after sanitization and attribute mapping.
+
+
+def test_prometheus_sink_records_expected_metrics_and_bounded_labels() -> None:
+    from prometheus_client import CollectorRegistry, generate_latest
+
+    registry = CollectorRegistry()
+    sink = PrometheusObservationSink(registry=registry)
+    event = ObservationEvent(
+        event="llm.call",
+        kind="metric",
+        context=RunContext(run_id="run-1", thread_id="thread-1", plan_id=1, user_id="2", agent_name="agent"),
+        status="success",
+        duration_ms=25,
+        fields={
+            "model": "fake-model",
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_tokens": 15,
+            "prompt": "do not label me",
+            "storage_key": "private/key",
+        },
+    )
+
+    sink.emit(event)
+    output = generate_latest(registry).decode("utf-8")
+
+    assert "smartclass_observation_events_total" in output
+    assert "smartclass_llm_calls_total" in output
+    assert "smartclass_llm_tokens_total" in output
+    assert 'model="fake-model"' in output
+    assert "run-1" not in output
+    assert "thread-1" not in output
+    assert "private/key" not in output
+    assert "do not label me" not in output
+
+
+def test_prometheus_label_governance_blocks_high_cardinality_keys() -> None:
+    event = ObservationEvent(
+        event="workspace.code_execution",
+        kind="metric",
+        context=RunContext(run_id="run-1", thread_id="thread-1", user_id="2"),
+        status="success",
+        fields={"language": "python", "filename": "lesson.py", "url": "https://example.test"},
+    )
+
+    keys = prometheus_label_keys_for_event(event)
+
+    assert "language" in keys
+    assert "run_id" not in keys
+    assert "thread_id" not in keys
+    assert "user_id" not in keys
+    assert "filename" not in keys
+    assert "url" not in keys
+    assert_prometheus_labels_are_bounded(event)
+
+
+def test_external_sink_failure_is_swallowed(caplog) -> None:
+    context = RunContext(run_id="run-1")
+
+    with caplog.at_level("WARNING", logger="app.observability"):
+        with trace_span("test.failure_isolation", context=context, sink=FailingObservationSink()):
+            pass
+
+    assert "observability_emit_failed" in caplog.text
+
+
+def test_prometheus_metrics_endpoint_and_bootstrap_idempotency(monkeypatch) -> None:
+    monkeypatch.setenv("PROMETHEUS_ENABLED", "true")
+    monkeypatch.setenv("PROMETHEUS_METRICS_PATH", "/metrics")
+    monkeypatch.setenv("OTEL_ENABLED", "false")
+    reset_observability_bootstrap_for_tests()
+    app = FastAPI()
+
+    first = configure_external_observability(app)
+    second = configure_external_observability(app)
+
+    assert first.prometheus_enabled is True
+    assert second.metrics_path == "/metrics"
+    assert sum(1 for route in app.routes if getattr(route, "path", None) == "/metrics") == 1
+
+    async def run() -> None:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.get("/metrics")
+        assert response.status_code == 200
+        assert "python_info" in response.text
+
+    asyncio.run(run())
+
+
+def test_otel_enabled_requires_endpoint(monkeypatch) -> None:
+    monkeypatch.setenv("OTEL_ENABLED", "true")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
+    monkeypatch.delenv("OTEL_OTLP_ENDPOINT", raising=False)
+    monkeypatch.setenv("PROMETHEUS_ENABLED", "false")
+    reset_observability_bootstrap_for_tests()
+
+    with pytest.raises(ObservabilityConfigurationError, match="OTEL_ENABLED=true"):
+        configure_external_observability(FastAPI())
 
 
 def test_workspace_execution_records_observation_event(tmp_path: Path) -> None:
