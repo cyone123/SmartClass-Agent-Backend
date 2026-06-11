@@ -789,12 +789,12 @@ def metadata_review_interrupt_node(
     if _is_approve_action(user_input):
         if reporter:
                 reporter.emit("metadata_review", "success", detail="已确认教学要素")
-        return Command(goto="rag_retrieval_node")
+        return Command(goto="teaching_design_memory_retrieval_node")
     # if reporter:
     #             reporter.emit("metadata_review", "success", detail="已修改教学要素")
     return Command(
         update=_build_resume_message_update(user_input),
-        goto="teaching_plan_memory_retrieval_node",
+        goto="metadata_structer_node",
     )
 
 
@@ -836,12 +836,12 @@ def intent_router_node(
 
 def route_decision(state: TeachingAssistantState):
     if state.get("intent") == "normal_chat":
-        return "normal_chat_memory_retrieval_node"
+        return "normal_chat_node"
     if state.get("intent") == "teaching_plan":
-        return "teaching_plan_memory_retrieval_node"
+        return "metadata_structer_node"
     if state.get("intent") == "artifact_revision":
         return "artifact_revision_memory_retrieval_node"
-    return "normal_chat_memory_retrieval_node"
+    return "normal_chat_node"
 
 
 def _runtime_user_id(runtime: Runtime[MemoryRuntimeContext] | None) -> str | None:
@@ -930,7 +930,7 @@ async def teaching_design_memory_retrieval_node(
     return await _experience_memory_retrieval_update(
         state,
         runtime,
-        goto="teaching_design_planner",
+        goto="rag_retrieval_node",
         config=config,
     )
 
@@ -1007,7 +1007,7 @@ async def normal_chat_node(
     )
     return {
         "messages": [response],
-        "memory_reflection_goto": "experience_memory_reflection_node",
+        "memory_reflection_goto": END,
     }
 
 
@@ -1536,8 +1536,8 @@ def build_agent_graph(
         "intent_router_node",
         route_decision,
         {
-            "normal_chat_memory_retrieval_node": "normal_chat_memory_retrieval_node",
-            "teaching_plan_memory_retrieval_node": "teaching_plan_memory_retrieval_node",
+            "normal_chat_node": "normal_chat_node",
+            "metadata_structer_node": "metadata_structer_node",
             "artifact_revision_memory_retrieval_node": "artifact_revision_memory_retrieval_node",
         },
     )
@@ -1552,7 +1552,7 @@ def build_agent_graph(
         },
     )
     agent_builder.add_edge("follow_up_questioner", "profile_memory_reflection_node")
-    agent_builder.add_edge(INTERRUPT_FOR_USERINPUT_NODE, "teaching_plan_memory_retrieval_node")
+    agent_builder.add_edge(INTERRUPT_FOR_USERINPUT_NODE, "metadata_structer_node")
     agent_builder.add_edge("rag_retrieval_node", "teaching_design_planner")
     agent_builder.add_edge("teaching_design_planner", "profile_memory_reflection_node")
     agent_builder.add_edge("ppt_generate_node", "artifact_fan_in_node")

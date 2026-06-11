@@ -126,7 +126,7 @@ def test_metadata_review_interrupt_node_routes_by_resume_payload(monkeypatch) ->
         lambda payload: {"action": "approve", "interrupt_id": "approval-1"},
     )
     approve_result = metadata_review_interrupt_node(state)
-    assert approve_result.goto == "rag_retrieval_node"
+    assert approve_result.goto == "teaching_design_memory_retrieval_node"
 
     monkeypatch.setattr(
         graph_module,
@@ -134,7 +134,7 @@ def test_metadata_review_interrupt_node_routes_by_resume_payload(monkeypatch) ->
         lambda payload: {"message": "补充目标", "attachment_text": "summary"},
     )
     modify_result = metadata_review_interrupt_node(state)
-    assert modify_result.goto == "teaching_plan_memory_retrieval_node"
+    assert modify_result.goto == "metadata_structer_node"
     assert modify_result.update["messages"][-1].content == "补充目标"
 
 

@@ -188,9 +188,9 @@ def test_profile_reflection_writes_memory_from_tool_call(monkeypatch) -> None:
     asyncio.run(run())
 
 
-def test_route_decision_targets_memory_retrieval_nodes() -> None:
-    assert route_decision({"intent": "normal_chat"}) == "normal_chat_memory_retrieval_node"
-    assert route_decision({"intent": "teaching_plan"}) == "teaching_plan_memory_retrieval_node"
+def test_route_decision_targets_performance_fast_paths() -> None:
+    assert route_decision({"intent": "normal_chat"}) == "normal_chat_node"
+    assert route_decision({"intent": "teaching_plan"}) == "metadata_structer_node"
     assert route_decision({"intent": "artifact_revision"}) == "artifact_revision_memory_retrieval_node"
 
 
