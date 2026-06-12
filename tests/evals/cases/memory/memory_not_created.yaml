@@ -1,0 +1,35 @@
+case_id: memory_not_created_001
+category: memory_write
+description: "评估系统是否在没有明确值得保存内容时避免创建记忆"
+version: "1.0"
+
+input:
+  user_id: "eval_user_memory_005"
+  plan_id: 9
+  thread_id: "eval_thread_memory_005"
+  message: "你好，今天天气真好"
+  attachments: []
+
+context:
+  user_profile:
+    role: "teacher"
+  chat_history: []
+
+expectations:
+  memory_created: false
+  reason: "普通闲聊，不涉及教学偏好或可复用经验"
+
+assertions:
+  - type: "memory_check"
+    field: "profile_memory_created"
+    expected: {"should_exist": false}
+    weight: 0.8
+  - type: "memory_check"
+    field: "experience_memory_created"
+    expected: {"should_exist": false}
+    weight: 0.8
+
+metadata:
+  author: "eval_designer"
+  created_at: "2026-06-11"
+  tags: ["memory", "write", "filtering"]

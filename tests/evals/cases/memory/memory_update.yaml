@@ -1,0 +1,46 @@
+case_id: memory_update_001
+category: memory_write
+description: "评估系统是否正确更新现有的 profile 记忆而非重复创建"
+version: "1.0"
+
+input:
+  user_id: "eval_user_memory_007"
+  plan_id: 11
+  thread_id: "eval_thread_memory_007"
+  message: "我之前说我喜欢互动式教学，现在我想补充：我也很重视学生的自主学习能力培养"
+  attachments: []
+
+context:
+  user_profile:
+    role: "teacher"
+    subject: "数学"
+    grade: "初中"
+  existing_profile_memory:
+    id: "profile_existing_007"
+    content: "该教师偏好使用互动式教学，学生多为城市学生"
+    created_at: "2026-06-05"
+  chat_history: []
+
+expectations:
+  memory_should_update: true
+  memory_should_not_duplicate: true
+  updated_memory_should_be_comprehensive: true
+
+assertions:
+  - type: "memory_check"
+    field: "profile_memory_id"
+    expected: {"should_equal": "profile_existing_007"}
+    weight: 0.9
+  - type: "contains"
+    field: "profile_memory_content"
+    expected: ["互动式教学", "自主学习能力"]
+    weight: 0.8
+  - type: "count_check"
+    field: "total_profile_memories"
+    expected: {"should_equal": 1}
+    weight: 0.7
+
+metadata:
+  author: "eval_designer"
+  created_at: "2026-06-11"
+  tags: ["memory", "write", "update"]

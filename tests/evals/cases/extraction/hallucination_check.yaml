@@ -1,0 +1,38 @@
+case_id: extraction_hallucination_001
+category: extraction_quality
+description: "评估系统是否会编造教学要素"
+version: "1.0"
+
+input:
+  user_id: "eval_user_ext_003"
+  plan_id: 13
+  thread_id: "eval_thread_ext_003"
+  message: "我要设计一节关于量子计算的课程"
+  attachments: []
+
+context:
+  user_profile:
+    role: "teacher"
+    subject: "未知"
+    grade: "未知"
+  chat_history: []
+
+expectations:
+  should_not_hallucinate_subject_or_grade: true
+  subject_should_remain_unknown_or_ask: true
+
+assertions:
+  - type: "hallucination_check"
+    field: "extracted_elements.subject"
+    expected: ["虚构", "编造", "不清楚"]
+    weight: 0.8
+
+  - type: "hallucination_check"
+    field: "extracted_elements.grade"
+    expected: ["虚构", "编造"]
+    weight: 0.8
+
+metadata:
+  author: "eval_designer"
+  created_at: "2026-06-11"
+  tags: ["extraction", "hallucination"]

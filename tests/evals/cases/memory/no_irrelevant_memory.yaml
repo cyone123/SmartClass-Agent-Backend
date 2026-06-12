@@ -1,0 +1,45 @@
+case_id: memory_no_irrelevant_001
+category: memory_retrieval
+description: "评估系统是否避免加载无关的记忆"
+version: "1.0"
+
+input:
+  user_id: "eval_user_memory_003"
+  plan_id: 7
+  thread_id: "eval_thread_memory_003"
+  message: "设计关于物理的高中课程"
+  attachments: []
+
+context:
+  user_profile:
+    role: "teacher"
+    subject: "物理"
+    grade: "高中"
+  available_experiences:
+    - id: "exp_math_001"
+      topic: "初中数学"
+      subject: "数学"
+    - id: "exp_math_002"
+      topic: "高中数学"
+      subject: "数学"
+  chat_history: []
+
+expectations:
+  should_not_load_math_memories: true
+  experience_memory_count: 0
+
+assertions:
+  - type: "memory_check"
+    field: "loaded_experience_memories"
+    expected: {"should_exist": false}
+    weight: 0.8
+    memory_check_type: "experience"
+  - type: "not_contains"
+    field: "loaded_experience_memories"
+    expected: ["数学", "初中", "高中"]
+    weight: 0.6
+
+metadata:
+  author: "eval_designer"
+  created_at: "2026-06-11"
+  tags: ["memory", "irrelevant", "filtering"]

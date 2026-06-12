@@ -1,0 +1,46 @@
+case_id: memory_load_experience_001
+category: memory_retrieval
+description: "评估系统是否加载了相关的 experience 记忆"
+version: "1.0"
+
+input:
+  user_id: "eval_user_memory_002"
+  plan_id: 6
+  thread_id: "eval_thread_memory_002"
+  message: "设计关于二次函数的初中数学课"
+  attachments: []
+
+context:
+  user_profile:
+    role: "teacher"
+    subject: "数学"
+    grade: "初中"
+  available_experiences:
+    - id: "exp_001"
+      topic: "二次函数"
+      strategy: "先让学生画图理解，再讲解"
+    - id: "exp_002"
+      topic: "勾股定理"
+      strategy: "从历史出发引入"
+  chat_history: []
+
+expectations:
+  experience_memories_should_load: true
+  loaded_count: 1
+  should_include_exp_001: true
+
+assertions:
+  - type: "memory_check"
+    field: "loaded_experience_memories"
+    expected: {"should_exist": true}
+    weight: 1.0
+    memory_check_type: "experience"
+  - type: "contains"
+    field: "loaded_experience_memories"
+    expected: "二次函数"
+    weight: 0.7
+
+metadata:
+  author: "eval_designer"
+  created_at: "2026-06-11"
+  tags: ["memory", "experience", "retrieval", "topical"]

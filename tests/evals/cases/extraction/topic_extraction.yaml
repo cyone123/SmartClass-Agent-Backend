@@ -1,0 +1,37 @@
+case_id: extraction_topic_001
+category: extraction_quality
+description: "评估系统对课程主题的精准抽取"
+version: "1.0"
+
+input:
+  user_id: "eval_user_ext_006"
+  plan_id: 16
+  thread_id: "eval_thread_ext_006"
+  message: "我要为初中语文课设计一节关于《朝花夕拾》中《从百草园到三味书屋》这篇课文的课程"
+  attachments: []
+
+context:
+  user_profile:
+    role: "teacher"
+    subject: "语文"
+    grade: "初中"
+  chat_history: []
+
+expectations:
+  topic_specific_and_accurate: true
+
+assertions:
+  - type: "contains"
+    field: "extracted_elements.topic"
+    expected: ["朝花夕拾", "从百草园到三味书屋"]
+    weight: 0.95
+
+  - type: "not_contains"
+    field: "extracted_elements.topic"
+    expected: ["随意", "虚构"]
+    weight: 0.5
+
+metadata:
+  author: "eval_designer"
+  created_at: "2026-06-11"
+  tags: ["extraction", "topic"]

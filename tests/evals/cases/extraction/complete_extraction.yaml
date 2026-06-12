@@ -1,0 +1,51 @@
+case_id: extraction_complete_001
+category: extraction_quality
+description: "评估系统是否完整抽取教学要素"
+version: "1.0"
+
+input:
+  user_id: "eval_user_ext_001"
+  plan_id: 11
+  thread_id: "eval_thread_ext_001"
+  message: "我想为高二学生设计一节关于三角函数的数学课，课时 45 分钟，重点是学生理解单位圆上的三角函数定义，难点是 sin、cos、tan 之间的关系"
+  attachments: []
+
+context:
+  user_profile:
+    role: "teacher"
+    subject: "数学"
+    grade: "高中"
+  chat_history: []
+
+expectations:
+  teaching_metadata_complete: true
+  has_subject: true
+  has_grade: true
+  has_topic: true
+  has_course_duration: true
+  has_teaching_objectives: true
+  has_key_points: true
+  is_marked_complete: true
+
+assertions:
+  - type: "extraction_quality"
+    field: "teaching_metadata"
+    expected: {"complete": true}
+    weight: 1.0
+    rubric: "extraction_quality"
+    min_score: 0.9
+
+  - type: "contains"
+    field: "extracted_elements.subject"
+    expected: "数学"
+    weight: 0.8
+
+  - type: "contains"
+    field: "extracted_elements.topic"
+    expected: ["三角函数", "单位圆"]
+    weight: 0.8
+
+metadata:
+  author: "eval_designer"
+  created_at: "2026-06-11"
+  tags: ["extraction", "complete"]

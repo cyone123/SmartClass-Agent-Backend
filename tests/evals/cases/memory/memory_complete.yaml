@@ -1,0 +1,44 @@
+case_id: memory_complete_001
+category: memory_write
+description: "评估系统记忆写入是否捕获完整的教学要素"
+version: "1.0"
+
+input:
+  user_id: "eval_user_memory_006"
+  plan_id: 10
+  thread_id: "eval_thread_memory_006"
+  message: "我是高中生物老师，学生都是20-30人的混合班级，我最喜欢用案例分析法和小组讨论，学生反馈说更容易理解"
+  attachments: []
+
+context:
+  user_profile:
+    role: "teacher"
+    subject: "生物"
+    grade: "高中"
+  chat_history: []
+
+expectations:
+  memory_created: true
+  should_capture_subject: true
+  should_capture_class_size: true
+  should_capture_teaching_method: true
+  should_capture_student_feedback: true
+
+assertions:
+  - type: "memory_check"
+    field: "profile_memory_context"
+    expected: {"should_exist": true}
+    weight: 1.0
+  - type: "contains"
+    field: "profile_memory_content"
+    expected: ["案例分析法", "小组讨论", "高中生物"]
+    weight: 0.8
+  - type: "semantic_match"
+    field: "profile_memory_content"
+    expected: "教学方法偏好"
+    weight: 0.7
+
+metadata:
+  author: "eval_designer"
+  created_at: "2026-06-11"
+  tags: ["memory", "write", "completeness"]

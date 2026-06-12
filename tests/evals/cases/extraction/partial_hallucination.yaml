@@ -1,0 +1,38 @@
+case_id: extraction_partial_hallucination_001
+category: extraction_quality
+description: "评估系统在混合正确和错误信息的情况"
+version: "1.0"
+
+input:
+  user_id: "eval_user_ext_004"
+  plan_id: 14
+  thread_id: "eval_thread_ext_004"
+  message: "为数学年级设计关于微积分的课程"
+  attachments: []
+
+context:
+  user_profile:
+    role: "teacher"
+    subject: "数学"
+    grade: "unknown"
+  chat_history: []
+
+expectations:
+  subject_correct: true
+  grade_incorrect_or_missing: true
+
+assertions:
+  - type: "contains"
+    field: "extracted_elements.subject"
+    expected: "数学"
+    weight: 0.9
+
+  - type: "hallucination_check"
+    field: "extracted_elements.grade"
+    expected: ["虚构", "编造"]
+    weight: 0.7
+
+metadata:
+  author: "eval_designer"
+  created_at: "2026-06-11"
+  tags: ["extraction", "partial_hallucination"]

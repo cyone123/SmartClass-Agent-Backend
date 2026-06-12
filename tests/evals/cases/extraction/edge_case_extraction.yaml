@@ -1,0 +1,33 @@
+case_id: extraction_edge_case_001
+category: extraction_quality
+description: "评估系统在极端情况下的抽取表现"
+version: "1.0"
+
+input:
+  user_id: "eval_user_ext_007"
+  plan_id: null
+  thread_id: "eval_thread_ext_edge"
+  message: "???课程设计???"
+  attachments: []
+
+context:
+  user_profile:
+    role: "teacher"
+  chat_history: []
+
+expectations:
+  should_handle_gracefully: true
+  should_not_crash: true
+
+assertions:
+  - type: "extraction_quality"
+    field: "teaching_metadata"
+    expected: {"complete": false}
+    weight: 0.5
+    rubric: "extraction_quality"
+    min_score: 0.0
+
+metadata:
+  author: "eval_designer"
+  created_at: "2026-06-11"
+  tags: ["extraction", "edge_case"]

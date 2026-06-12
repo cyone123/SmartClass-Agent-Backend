@@ -1,0 +1,46 @@
+case_id: memory_edge_case_001
+category: memory_write
+description: "评估系统在边界情况下的记忆处理（长文本、特殊字符、多语言混合）"
+version: "1.0"
+
+input:
+  user_id: "eval_user_memory_008"
+  plan_id: 12
+  thread_id: "eval_thread_memory_008"
+  message: "我教授 AP Biology + IB课程，学生来自不同文化背景（中文、英文、西班牙语混合），我用 Socratic method 教学。我的座右铭是：\"Teaching is the one profession that creates all other professions.\" 课堂中我强调 critical thinking 和 interdisciplinary connections。"
+  attachments: []
+
+context:
+  user_profile:
+    role: "teacher"
+  chat_history: []
+
+expectations:
+  memory_created: true
+  should_handle_special_characters: true
+  should_handle_mixed_language: true
+  should_handle_quotes: true
+  should_not_corrupt_data: true
+
+assertions:
+  - type: "memory_check"
+    field: "profile_memory_context"
+    expected: {"should_exist": true}
+    weight: 1.0
+  - type: "encoding_check"
+    field: "profile_memory_content"
+    expected: "utf8_valid"
+    weight: 0.9
+  - type: "contains"
+    field: "profile_memory_content"
+    expected: ["AP Biology", "critical thinking"]
+    weight: 0.7
+  - type: "not_contains"
+    field: "profile_memory_content"
+    expected: ["\\x", "???", ""]
+    weight: 0.8
+
+metadata:
+  author: "eval_designer"
+  created_at: "2026-06-11"
+  tags: ["memory", "write", "edge_case", "i18n"]
