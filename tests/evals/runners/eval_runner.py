@@ -10,7 +10,12 @@ from typing import Optional
 import yaml
 
 from app.core.evaluation import EvalCase, EvalCaseStatus, EvalReport, EvalResult
-from tests.evals.evaluators import BaseEvaluator, IntentEvaluator
+from tests.evals.evaluators import (
+    BaseEvaluator,
+    IntentEvaluator,
+    MemoryEvaluator,
+    ExtractionEvaluator,
+)
 
 
 class EvalRunner:
@@ -21,6 +26,10 @@ class EvalRunner:
         self.results_dir = results_dir
         self.evaluators: dict[str, BaseEvaluator] = {
             "intent_recognition": IntentEvaluator(),
+            "memory_retrieval": MemoryEvaluator(),
+            "memory_write": MemoryEvaluator(),
+            "memory_update": MemoryEvaluator(),
+            "extraction_quality": ExtractionEvaluator(),
         }
 
     def load_cases(self, category: Optional[str] = None) -> list[EvalCase]:

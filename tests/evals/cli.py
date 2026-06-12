@@ -11,7 +11,7 @@ from pathlib import Path
 
 import click
 
-from tests.evals.runners import EvalRunner
+from .runners import EvalRunner
 
 # 修复 Windows 控制台编码问题
 if sys.platform == "win32":
@@ -31,7 +31,38 @@ def cli():
 
 
 @cli.command()
-@click.option("--category", "-c", help="Filter by category")
+def list_categories():
+    """List all available evaluation categories"""
+    base_dir = Path(__file__).parent
+    cases_dir = base_dir / "cases"
+    results_dir = base_dir / "results"
+
+    runner = EvalRunner(cases_dir, results_dir)
+
+    categories = {
+        "intent_recognition": "意图识别评估（Phase 1）",
+        "memory_retrieval": "记忆检索评估（Phase 2）",
+        "memory_write": "记忆写入评估（Phase 2）",
+        "memory_update": "记忆更新评估（Phase 2）",
+        "extraction_quality": "教学要素抽取评估（Phase 2）",
+    }
+
+    print(f"\n{'=' * 60}")
+    print(f"[CATEGORIES] Available Evaluation Categories:")
+    print(f"{'=' * 60}")
+
+    for cat_key, cat_desc in categories.items():
+        # Try to count cases for this category
+        cases = runner.load_cases(category=cat_key)
+        case_count = len(cases)
+        count_str = f" ({case_count} case{'s' if case_count != 1 else ''})" if case_count > 0 else ""
+        print(f"  {cat_key:<24} - {cat_desc}{count_str}")
+
+    print()
+
+
+@cli.command()
+@click.option("--category", "-c", help="Filter by category (e.g., intent_recognition, memory_retrieval, memory_write, memory_update, extraction_quality)")
 @click.option("--case-id", "-i", multiple=True, help="Specific case IDs")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 def run(category, case_id, verbose):
