@@ -1,0 +1,27 @@
+# 意图识别评分标准
+
+chat_response:
+  description: "评估闲聊响应质量"
+  criteria:
+    relevance:
+      weight: 0.4
+      description: "响应是否相关且自然"
+    tone:
+      weight: 0.3
+      description: "语气是否友好、专业"
+    no_hallucination:
+      weight: 0.3
+      description: "没有编造事实或过度承诺"
+
+teaching_planning_response:
+  description: "评估教学规划响应质量"
+  criteria:
+    completeness:
+      weight: 0.4
+      description: "教学要素是否完整"
+    pedagogical_soundness:
+      weight: 0.4
+      description: "教学设计是否合理"
+    alignment:
+      weight: 0.2
+      description: "是否符合用户输入的要求"

@@ -1,0 +1,48 @@
+# 意图识别评估用例 - 基础闲聊
+
+case_id: intent_basic_chat_001
+category: intent_recognition
+description: "识别用户闲聊意图"
+version: "1.0"
+
+# 测试输入
+input:
+  user_id: "eval_user_001"
+  plan_id: null
+  thread_id: "eval_thread_chat_001"
+  message: "你好，今天天气不错"
+  attachments: []
+
+# 上下文设置
+context:
+  user_profile:
+    role: "teacher"
+    subject: "数学"
+    grade: "初中"
+  chat_history: []
+  available_memories: []
+
+# 期望结果
+expectations:
+  intent: "normal_chat"
+  should_not_extract_elements: true
+  should_not_trigger_rag: true
+  response_should_be_friendly: true
+
+# 断言规则
+assertions:
+  - type: "route_match"
+    field: "intent"
+    expected: "normal_chat"
+    weight: 1.0
+
+  - type: "not_contains"
+    field: "extracted_elements"
+    expected: "subject"
+    weight: 0.5
+
+# 元数据
+metadata:
+  author: "eval_designer"
+  created_at: "2026-06-11"
+  tags: ["intent", "chat", "baseline"]

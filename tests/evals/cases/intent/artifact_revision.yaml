@@ -1,0 +1,48 @@
+# 意图识别评估用例 - 产物修改请求
+
+case_id: intent_artifact_revision_001
+category: intent_recognition
+description: "识别产物修改意图"
+version: "1.0"
+
+# 测试输入
+input:
+  user_id: "eval_user_003"
+  plan_id: 2
+  thread_id: "eval_thread_revision_001"
+  message: "把PPT的第三页标题改成'勾股定理的应用'"
+  attachments: []
+
+# 上下文设置
+context:
+  user_profile:
+    role: "teacher"
+    subject: "数学"
+    grade: "初中"
+  chat_history:
+    - role: "assistant"
+      content: "已为您生成PPT"
+  available_artifacts:
+    - artifact_id: 101
+      artifact_type: "ppt"
+      title: "勾股定理.pptx"
+      status: "ready"
+
+# 期望结果
+expectations:
+  intent: "artifact_revision"
+  should_identify_target_artifact: true
+  should_not_trigger_new_planning: true
+
+# 断言规则
+assertions:
+  - type: "route_match"
+    field: "intent"
+    expected: "artifact_revision"
+    weight: 1.0
+
+# 元数据
+metadata:
+  author: "eval_designer"
+  created_at: "2026-06-11"
+  tags: ["intent", "artifact_revision", "baseline"]

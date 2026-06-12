@@ -1,0 +1,59 @@
+# 意图识别评估用例 - 教学规划请求
+
+case_id: intent_teaching_plan_001
+category: intent_recognition
+description: "识别教学规划意图"
+version: "1.0"
+
+# 测试输入
+input:
+  user_id: "eval_user_002"
+  plan_id: 1
+  thread_id: "eval_thread_plan_001"
+  message: "帮我设计一节初中数学课，主题是勾股定理"
+  attachments: []
+
+# 上下文设置
+context:
+  user_profile:
+    role: "teacher"
+    subject: "数学"
+    grade: "初中"
+  chat_history: []
+  available_memories: []
+
+# 期望结果
+expectations:
+  intent: "teaching_plan"
+  should_extract_elements: true
+  extracted_subject: "数学"
+  extracted_grade: "初中"
+  extracted_topic: "勾股定理"
+
+# 断言规则
+assertions:
+  - type: "route_match"
+    field: "intent"
+    expected: "teaching_plan"
+    weight: 1.0
+
+  - type: "contains"
+    field: "extracted_elements.subject"
+    expected: "数学"
+    weight: 0.8
+
+  - type: "contains"
+    field: "extracted_elements.grade"
+    expected: "初中"
+    weight: 0.8
+
+  - type: "contains"
+    field: "extracted_elements.topic"
+    expected: "勾股定理"
+    weight: 0.8
+
+# 元数据
+metadata:
+  author: "eval_designer"
+  created_at: "2026-06-11"
+  tags: ["intent", "teaching_plan", "baseline"]
