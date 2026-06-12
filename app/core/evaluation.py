@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +24,8 @@ class AssertionType(str, Enum):
     NOT_CONTAINS = "not_contains"
     RESPONSE_QUALITY = "response_quality"
     MEMORY_CHECK = "memory_check"
+    EXTRACTION_QUALITY = "extraction_quality"
+    HALLUCINATION_CHECK = "hallucination_check"
     ARTIFACT_VALID = "artifact_valid"
     SECURITY_CHECK = "security_check"
     PERFORMANCE_CHECK = "performance_check"
@@ -37,6 +39,10 @@ class EvalAssertion(BaseModel):
     weight: float = 1.0
     rubric: Optional[str] = None
     min_score: Optional[float] = None
+    memory_check_type: Optional[Literal["profile", "experience"]] = None
+    should_exist: Optional[bool] = None
+    max_privacy_exposure: Optional[float] = None
+    hallucination_keywords: Optional[list[str]] = None
 
 
 class EvalCase(BaseModel):
