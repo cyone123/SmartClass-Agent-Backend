@@ -7,7 +7,7 @@ from psycopg_pool import AsyncConnectionPool
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.config import get_db_uri
+from app.config import get_db_uri, get_sqlalchemy_echo
 from app.models import Base
 
 
@@ -151,7 +151,7 @@ def get_async_db_uri() -> str:
 
 async_engine = create_async_engine(
     get_async_db_uri(),
-    echo=True,
+    echo=get_sqlalchemy_echo(),
     pool_size=10,
     max_overflow=20,
 )

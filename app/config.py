@@ -4,7 +4,7 @@ from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
 def get_env(name: str, default: str | None = None) -> str | None:
@@ -53,6 +53,10 @@ def get_db_uri() -> str:
     if sslmode:
         conn_string = f"{conn_string}?sslmode={sslmode}"
     return conn_string
+
+
+def get_sqlalchemy_echo() -> bool:
+    return _get_bool_env("SQLALCHEMY_ECHO", False)
 
 
 def get_backend_root() -> Path:
