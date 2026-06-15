@@ -7,7 +7,7 @@ from daytona import Daytona, DaytonaConfig, Image, CreateSnapshotParams
 from dotenv import load_dotenv
 
 
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(BACKEND_ROOT / ".env")
 
 

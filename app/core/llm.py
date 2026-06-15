@@ -73,16 +73,6 @@ def get_small_model(*, streaming: bool = False) -> ChatOpenAI:
         **_stream_usage_kwargs(streaming),
     )
 
-def get_suggestion_model(*, streaming: bool = False) -> ChatOpenAI:
-    return ChatOpenAI(
-        model=os.getenv("SUGGESTION_MODEL"),
-        api_key=os.getenv("SUGGESTION_API_KEY"),
-        base_url=os.getenv("SUGGESTION_BASE_URL"),
-        streaming=streaming,
-        **_stream_usage_kwargs(streaming),
-    )
-
-
 def get_memory_model(*, streaming: bool = False) -> ChatOpenAI:
     return ChatOpenAI(
         model=_first_non_empty_env(
@@ -114,9 +104,9 @@ def get_memory_model(*, streaming: bool = False) -> ChatOpenAI:
 
 def get_structured_fast_model(*, streaming: bool = False) -> ChatOpenAI:
     return ChatOpenAI(
-        model=_first_non_empty_env("STRUCTURED_FAST_MODEL", "SMALL_MDOEL", "STRUCTED_MDOEL"),
-        api_key=_first_non_empty_env("STRUCTURED_FAST_API_KEY", "SMALL_API_KEY", "STRUCTED_API_KEY"),
-        base_url=_first_non_empty_env("STRUCTURED_FAST_BASE_URL", "SMALL_BASE_URL", "STRUCTED_BASE_URL"),
+        model=_first_non_empty_env("STRUCTURED_FAST_MODEL", "SMALL_MDOEL"),
+        api_key=_first_non_empty_env("STRUCTURED_FAST_API_KEY", "SMALL_API_KEY"),
+        base_url=_first_non_empty_env("STRUCTURED_FAST_BASE_URL", "SMALL_BASE_URL"),
         streaming=streaming,
         timeout=_get_timeout_seconds(),
         **_stream_usage_kwargs(streaming),

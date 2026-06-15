@@ -44,7 +44,7 @@ from app.core.graph import (
     build_input_messages,
     get_pending_approval_payload,
 )
-from app.core.llm import get_model, get_small_model, get_suggestion_model
+from app.core.llm import get_model, get_small_model
 from app.core.observability import (
     ObservationSink,
     RunContext,
@@ -828,7 +828,7 @@ class AgentRuntime:
         self.memory_store = memory_store
         self.rag_runtime = rag_runtime
         self.video_transcription_runtime = video_transcription_runtime
-        self.suggestion_generator = get_suggestion_model(streaming=False)
+        self.suggestion_generator = get_small_model(streaming=False)
         self._thread_locks: dict[str | None, asyncio.Lock] = {}
         self._thread_locks_guard = asyncio.Lock()
 
