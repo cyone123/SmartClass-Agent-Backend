@@ -1,0 +1,47 @@
+case_id: context_compression_failure_fallback_001
+category: context_compression
+description: "压缩模型失败时保留原消息状态并完成流程"
+version: "1.0"
+
+input:
+  user_id: "eval_user_context_003"
+  plan_id: 1
+  thread_id: "eval_thread_context_003"
+  message: "继续设计课程"
+  attachments: []
+
+context:
+  long_turn_count: 8
+  trigger_tokens: 10
+  keep_recent_turns: 2
+  simulate_failure: true
+  teaching_metadata:
+    subject: "数学"
+    grade: "初中"
+    topic: "勾股定理"
+    course_duration: "45分钟"
+    is_complete: true
+
+expectations:
+  compression_status: "failed"
+  stream_completed: true
+  update_created: false
+
+assertions:
+  - type: "route_match"
+    field: "compression_status"
+    expected: "failed"
+    weight: 1.0
+  - type: "route_match"
+    field: "stream_completed"
+    expected: true
+    weight: 1.0
+  - type: "route_match"
+    field: "update_created"
+    expected: false
+    weight: 1.0
+
+metadata:
+  author: "codex"
+  created_at: "2026-07-03"
+  tags: ["context_compression", "failure_fallback"]

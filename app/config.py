@@ -186,6 +186,45 @@ def get_prometheus_export_mode() -> str:
     return (get_env("PROMETHEUS_EXPORT_MODE", "endpoint") or "endpoint").strip().lower()
 
 
+def get_context_compression_enabled() -> bool:
+    return _get_bool_env("CONTEXT_COMPRESSION_ENABLED", False)
+
+
+def get_context_compression_model() -> str | None:
+    return get_env("CONTEXT_COMPRESSION_MODEL")
+
+
+def get_context_compression_api_key() -> str | None:
+    return get_env("CONTEXT_COMPRESSION_API_KEY")
+
+
+def get_context_compression_base_url() -> str | None:
+    return get_env("CONTEXT_COMPRESSION_BASE_URL")
+
+
+def get_context_compression_timeout_seconds() -> float | None:
+    timeout_ms = _get_int_env("CONTEXT_COMPRESSION_TIMEOUT_MS", 30000)
+    if timeout_ms <= 0:
+        return None
+    return timeout_ms / 1000
+
+
+def get_context_compression_trigger_tokens() -> int:
+    return _get_int_env("CONTEXT_COMPRESSION_TRIGGER_TOKENS", 24000)
+
+
+def get_context_compression_keep_recent_turns() -> int:
+    return max(1, _get_int_env("CONTEXT_COMPRESSION_KEEP_RECENT_TURNS", 6))
+
+
+def get_context_compression_max_output_tokens() -> int:
+    return max(256, _get_int_env("CONTEXT_COMPRESSION_MAX_OUTPUT_TOKENS", 3000))
+
+
+def get_context_compression_max_preface_chars() -> int:
+    return max(1000, _get_int_env("CONTEXT_COMPRESSION_MAX_PREFACE_CHARS", 6000))
+
+
 def get_public_api_base_url() -> str | None:
     configured = get_env("PUBLIC_API_BASE_URL")
     if configured is None:

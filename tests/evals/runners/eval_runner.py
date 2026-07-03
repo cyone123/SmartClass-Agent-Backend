@@ -15,6 +15,7 @@ from tests.evals.evaluators import (
     IntentEvaluator,
     MemoryEvaluator,
     ExtractionEvaluator,
+    ContextCompressionEvaluator,
 )
 
 
@@ -30,6 +31,7 @@ class EvalRunner:
             "memory_write": MemoryEvaluator(),
             "memory_update": MemoryEvaluator(),
             "extraction_quality": ExtractionEvaluator(),
+            "context_compression": ContextCompressionEvaluator(),
         }
 
     def load_cases(self, category: Optional[str] = None) -> list[EvalCase]:

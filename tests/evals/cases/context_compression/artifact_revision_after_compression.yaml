@@ -1,0 +1,54 @@
+case_id: context_compression_artifact_revision_001
+category: context_compression
+description: "压缩上下文保留产物状态以支持后续修改路由"
+version: "1.0"
+
+input:
+  user_id: "eval_user_context_002"
+  plan_id: 1
+  thread_id: "eval_thread_context_002"
+  message: "把刚才的课件活动页改得更适合小组讨论"
+  attachments: []
+
+context:
+  long_turn_count: 7
+  trigger_tokens: 10
+  keep_recent_turns: 2
+  teaching_metadata:
+    subject: "数学"
+    grade: "初中"
+    topic: "勾股定理"
+    course_duration: "45分钟"
+    is_complete: true
+  artifact_catalog:
+    - id: 12
+      type: "ppt"
+      title: "勾股定理课件"
+      revision_number: 1
+  revision_results:
+    - artifact_id: 12
+      artifact_type: "ppt"
+      status: "ready"
+
+expectations:
+  compression_status: "success"
+  should_preserve_artifact_state: true
+
+assertions:
+  - type: "route_match"
+    field: "compression_status"
+    expected: "success"
+    weight: 1.0
+  - type: "contains"
+    field: "compressed_context"
+    expected: "勾股定理课件"
+    weight: 1.0
+  - type: "contains"
+    field: "compressed_context"
+    expected: "Artifact state"
+    weight: 0.8
+
+metadata:
+  author: "codex"
+  created_at: "2026-07-03"
+  tags: ["context_compression", "artifact_revision"]

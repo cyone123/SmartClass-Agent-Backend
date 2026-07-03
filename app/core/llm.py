@@ -6,6 +6,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
+from app.config import (
+    get_context_compression_api_key,
+    get_context_compression_base_url,
+    get_context_compression_model,
+    get_context_compression_timeout_seconds,
+)
+
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
@@ -98,6 +105,51 @@ def get_memory_model(*, streaming: bool = False) -> ChatOpenAI:
         ),
         streaming=streaming,
         timeout=_get_timeout_seconds(),
+        **_stream_usage_kwargs(streaming),
+    )
+
+
+def get_context_compression_llm(*, streaming: bool = False) -> ChatOpenAI:
+    """Return the dedicated short-term context compression model.
+
+    Explicit CONTEXT_COMPRESSION_* values win. When omitted, fall back to the
+    existing memory/structured/small/main model chain so deployments can enable
+    compression before provisioning a separate model endpoint.
+    """
+    return ChatOpenAI(
+        model=(
+            get_context_compression_model()
+            or _first_non_empty_env(
+                "MEMORY_MODEL",
+                "STRUCTURED_FAST_MODEL",
+                "STRUCTED_MDOEL",
+                "SMALL_MDOEL",
+                "MODEL",
+            )
+        ),
+        api_key=(
+            get_context_compression_api_key()
+            or _first_non_empty_env(
+                "MEMORY_API_KEY",
+                "STRUCTURED_FAST_API_KEY",
+                "STRUCTED_API_KEY",
+                "STRUCTURED_API_KEY",
+                "SMALL_API_KEY",
+                "API_KEY",
+            )
+        ),
+        base_url=(
+            get_context_compression_base_url()
+            or _first_non_empty_env(
+                "MEMORY_BASE_URL",
+                "STRUCTURED_FAST_BASE_URL",
+                "STRUCTED_BASE_URL",
+                "SMALL_BASE_URL",
+                "BASE_URL",
+            )
+        ),
+        streaming=streaming,
+        timeout=get_context_compression_timeout_seconds() or _get_timeout_seconds(),
         **_stream_usage_kwargs(streaming),
     )
 

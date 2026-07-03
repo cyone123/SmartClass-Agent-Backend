@@ -45,6 +45,7 @@ def list_categories():
         "memory_write": "记忆写入评估（Phase 2）",
         "memory_update": "记忆更新评估（Phase 2）",
         "extraction_quality": "教学要素抽取评估（Phase 2）",
+        "context_compression": "上下文压缩评估",
     }
 
     print(f"\n{'=' * 60}")
@@ -62,7 +63,7 @@ def list_categories():
 
 
 @cli.command()
-@click.option("--category", "-c", help="Filter by category (e.g., intent_recognition, memory_retrieval, memory_write, memory_update, extraction_quality)")
+@click.option("--category", "-c", help="Filter by category (e.g., intent_recognition, memory_retrieval, memory_write, memory_update, extraction_quality, context_compression)")
 @click.option("--case-id", "-i", multiple=True, help="Specific case IDs")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 def run(category, case_id, verbose):

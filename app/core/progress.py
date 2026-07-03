@@ -31,6 +31,7 @@ ProgressStepKey = Literal[
     "docx_revision",
     "game_revision",
     "artifact_fan_in",
+    "context_compression",
 ]
 ProgressStatus = Literal["pending", "running", "success", "failed"]
 
@@ -58,6 +59,7 @@ STEP_ORDER: tuple[ProgressStepKey, ...] = (
     "docx_revision",
     "game_revision",
     "artifact_fan_in",
+    "context_compression",
 )
 STEP_LABELS: dict[ProgressStepKey, str] = {
     "attachment_analysis": "附件分析",
@@ -68,6 +70,7 @@ STEP_LABELS: dict[ProgressStepKey, str] = {
     "skill_activation": "Skill 加载",
     "code_preparation": "代码准备",
     "code_execution": "代码执行",
+    "context_compression": "上下文压缩",
     "intent_recognition": "意图识别",
     "metadata_structuring": "结构化要素提取",
     "rag_retrieval": "RAG 检索",

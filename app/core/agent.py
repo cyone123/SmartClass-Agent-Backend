@@ -38,6 +38,10 @@ from langgraph.store.base import BaseStore
 from langgraph.types import Command
 
 from app.config import get_backend_root, get_workspace_execution_backend
+from app.core.context_compression import (
+    CompressionSettings,
+    compress_state_messages,
+)
 from app.core.graph import (
     RESUMABLE_INTERRUPT_NODES,
     build_agent_graph,
@@ -1186,6 +1190,121 @@ class AgentRuntime:
         messages = values.get("messages", []) or []
         return [message for message in messages if isinstance(message, BaseMessage)]
 
+    def _log_context_compression_skip(
+        self,
+        *,
+        reason: str,
+        context: RunContext,
+        sink: ObservationSink,
+    ) -> None:
+        log_observation(
+            "context.compression.skipped",
+            context=context.with_agent("context_compression"),
+            sink=sink,
+            status="success",
+            fields={"reason": reason, "decision": "skip"},
+        )
+
+    async def _maybe_compress_thread_context(
+        self,
+        thread_id: str | None,
+        *,
+        context: RunContext,
+        sink: ObservationSink,
+        progress_reporter: ProgressReporter,
+    ) -> None:
+        if not thread_id:
+            self._log_context_compression_skip(
+                reason="no_thread",
+                context=context,
+                sink=sink,
+            )
+            return
+
+        state_snapshot = await self._get_thread_state_snapshot(thread_id)
+        if state_snapshot is None:
+            self._log_context_compression_skip(
+                reason="no_thread",
+                context=context,
+                sink=sink,
+            )
+            return
+        if self._has_resumable_interrupt(state_snapshot):
+            self._log_context_compression_skip(
+                reason="resumable_interrupt",
+                context=context,
+                sink=sink,
+            )
+            return
+
+        values = getattr(state_snapshot, "values", {}) or {}
+
+        def emit_context_compression_started(_plan: Any) -> None:
+            progress_reporter.emit(
+                "context_compression",
+                "running",
+                detail="正在整理长对话上下文",
+            )
+
+        result = await compress_state_messages(
+            values,
+            context=context,
+            sink=sink,
+            settings=CompressionSettings(),
+            on_compression_started=emit_context_compression_started,
+        )
+        if result.status == "skipped":
+            return
+
+        if result.status == "failed" or result.update is None:
+            progress_reporter.emit(
+                "context_compression",
+                "failed",
+                detail="上下文压缩失败，已保留原上下文",
+            )
+            return
+
+        try:
+            await self.streaming_graph.aupdate_state(
+                get_thread_config(
+                    thread_id,
+                    run_id=context.run_id,
+                    user_id=context.user_id,
+                    plan_id=context.plan_id,
+                    run_context=context,
+                    observation_sink=sink,
+                    progress_reporter=progress_reporter,
+                ),
+                result.update,
+            )
+        except Exception as exc:
+            log_observation(
+                "context.compression.failed",
+                context=context.with_agent("context_compression"),
+                sink=sink,
+                status="failed",
+                fields={
+                    "error_category": categorize_error(exc),
+                    "error_type": exc.__class__.__name__,
+                    "error_message": str(exc),
+                    "reason": "state_update_failed",
+                },
+            )
+            progress_reporter.emit(
+                "context_compression",
+                "failed",
+                detail="上下文压缩写入失败，已保留原上下文",
+            )
+            return
+        progress_reporter.emit(
+            "context_compression",
+            "success",
+            detail=(
+                "已完成上下文压缩"
+                f"（约 {result.estimated_tokens_before} -> {result.estimated_tokens_after} tokens）"
+            ),
+        )
+
     async def _generate_follow_up_suggestions(
         self,
         thread_id: str,
@@ -2191,6 +2310,11 @@ class AgentRuntime:
                                 "data": approval_payload,
                             }
                         )
+                        self._log_context_compression_skip(
+                            reason="pending_approval",
+                            context=context,
+                            sink=sink,
+                        )
 
                     if not received_text_chunk and not pending_approval:
                         log_observation(
@@ -2200,7 +2324,14 @@ class AgentRuntime:
                             status="success",
                             fields={"pending_approval": False},
                         )
-                    elif graph_thread_id and not pending_approval:
+                    if graph_thread_id and not pending_approval:
+                        await self._maybe_compress_thread_context(
+                            graph_thread_id,
+                            context=context,
+                            sink=sink,
+                            progress_reporter=progress_reporter,
+                        )
+                    if graph_thread_id and received_text_chunk and not pending_approval:
                         suggestions = await self._generate_follow_up_suggestions(
                             graph_thread_id,
                             run_context=context,

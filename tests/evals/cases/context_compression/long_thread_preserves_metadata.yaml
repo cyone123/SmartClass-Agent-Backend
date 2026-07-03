@@ -1,0 +1,49 @@
+case_id: context_compression_long_thread_001
+category: context_compression
+description: "长教学设计对话压缩后保留结构化教学要素"
+version: "1.0"
+
+input:
+  user_id: "eval_user_context_001"
+  plan_id: 1
+  thread_id: "eval_thread_context_001"
+  message: "继续完善勾股定理教学设计"
+  attachments: []
+
+context:
+  long_turn_count: 8
+  trigger_tokens: 10
+  keep_recent_turns: 2
+  teaching_metadata:
+    subject: "数学"
+    grade: "初中"
+    topic: "勾股定理"
+    course_duration: "45分钟"
+    key_points: ["勾股定理的表达与应用"]
+    difficult_points: ["从几何情境抽象出数量关系"]
+    teaching_objectives: "理解并应用勾股定理"
+    is_complete: true
+  rag_context: "教材建议从直角三角形面积关系引入勾股定理。"
+
+expectations:
+  compression_status: "success"
+  should_preserve_metadata: true
+
+assertions:
+  - type: "route_match"
+    field: "compression_status"
+    expected: "success"
+    weight: 1.0
+  - type: "contains"
+    field: "compressed_context"
+    expected: "勾股定理"
+    weight: 1.0
+  - type: "contains"
+    field: "teaching_metadata.topic"
+    expected: "勾股定理"
+    weight: 1.0
+
+metadata:
+  author: "codex"
+  created_at: "2026-07-03"
+  tags: ["context_compression", "metadata", "long_thread"]
