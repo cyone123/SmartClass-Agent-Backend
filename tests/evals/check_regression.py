@@ -4,11 +4,10 @@
 """
 
 import json
-import sys
 import os
+import sys
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
-from datetime import datetime
+from typing import Dict, List, Optional
 
 # 修复 Windows 控制台编码问题
 if sys.platform == "win32":
@@ -75,7 +74,7 @@ def find_latest_result(results_dir: Path) -> Optional[Path]:
 def load_eval_result(result_file: Path) -> Optional[Dict]:
     """加载评估结果文件"""
     try:
-        with open(result_file, 'r', encoding='utf-8') as f:
+        with open(result_file, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
         print(f"❌ Failed to load result file: {e}")
@@ -110,34 +109,19 @@ def check_regression(eval_data: Dict) -> RegressionCheckResult:
 
     # 检查意图识别（CRITICAL）
     intent_score = category_scores.get("intent_recognition", 0.0)
-    result.add_metric(
-        "intent_recognition",
-        actual=intent_score * 100,
-        expected=100.0,
-        threshold_type="=="
-    )
+    result.add_metric("intent_recognition", actual=intent_score * 100, expected=100.0, threshold_type="==")
 
     # 检查记忆检索（HIGH）
     memory_retrieval_score = category_scores.get("memory_retrieval", 0.0)
     if memory_retrieval_score > 0:
-        result.add_metric(
-            "memory_retrieval",
-            actual=memory_retrieval_score * 100,
-            expected=80.0,
-            threshold_type=">="
-        )
+        result.add_metric("memory_retrieval", actual=memory_retrieval_score * 100, expected=80.0, threshold_type=">=")
     else:
         result.add_warning("memory_retrieval: 无评估数据（跳过检查）")
 
     # 检查提取质量（HIGH）
     extraction_score = category_scores.get("extraction_quality", 0.0)
     if extraction_score > 0:
-        result.add_metric(
-            "extraction_quality",
-            actual=extraction_score * 100,
-            expected=80.0,
-            threshold_type=">="
-        )
+        result.add_metric("extraction_quality", actual=extraction_score * 100, expected=80.0, threshold_type=">=")
     else:
         result.add_warning("extraction_quality: 无评估数据（跳过检查）")
 
@@ -145,8 +129,7 @@ def check_regression(eval_data: Dict) -> RegressionCheckResult:
     overall_pass_rate = extract_pass_rate(eval_data)
     if overall_pass_rate < 0.7:
         result.add_warning(
-            f"Overall pass rate is low: {overall_pass_rate*100:.1f}% "
-            "(recommendation: investigate failures)"
+            f"Overall pass rate is low: {overall_pass_rate * 100:.1f}% (recommendation: investigate failures)"
         )
 
     return result
@@ -186,10 +169,10 @@ def print_regression_report(eval_data: Dict, check_result: RegressionCheckResult
     # 打印总体状态
     print()
     if check_result.overall_status == "PASS":
-        print(f"Overall: PASS ✅")
+        print("Overall: PASS ✅")
         print()
     else:
-        print(f"Overall: FAIL ❌")
+        print("Overall: FAIL ❌")
         print()
         print("[FAILED METRICS]")
         for failed_metric in check_result.failed_metrics:
@@ -208,7 +191,7 @@ def print_regression_report(eval_data: Dict, check_result: RegressionCheckResult
     print(f"  Average score: {eval_data.get('avg_score', 0):.3f}")
     print(f"  Execution time: {eval_data.get('execution_time', 0):.2f}s")
 
-    timestamp = eval_data.get('timestamp', 'unknown')
+    timestamp = eval_data.get("timestamp", "unknown")
     print(f"  Timestamp: {timestamp}")
     print()
 

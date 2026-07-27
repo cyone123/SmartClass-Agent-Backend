@@ -1,4 +1,5 @@
 """评估 CLI 工具"""
+
 import os
 import sys
 
@@ -19,9 +20,7 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8")
 
     # 修复 Windows asyncio 事件循环问题
-    asyncio.set_event_loop_policy(
-        asyncio.WindowsSelectorEventLoopPolicy()
-    )
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 @click.group()
@@ -49,7 +48,7 @@ def list_categories():
     }
 
     print(f"\n{'=' * 60}")
-    print(f"[CATEGORIES] Available Evaluation Categories:")
+    print("[CATEGORIES] Available Evaluation Categories:")
     print(f"{'=' * 60}")
 
     for cat_key, cat_desc in categories.items():
@@ -63,7 +62,11 @@ def list_categories():
 
 
 @cli.command()
-@click.option("--category", "-c", help="Filter by category (e.g., intent_recognition, memory_retrieval, memory_write, memory_update, extraction_quality, context_compression)")
+@click.option(
+    "--category",
+    "-c",
+    help="Filter by category (e.g., intent_recognition, memory_retrieval, memory_write, memory_update, extraction_quality, context_compression)",
+)
 @click.option("--case-id", "-i", multiple=True, help="Specific case IDs")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 def run(category, case_id, verbose):
@@ -73,17 +76,15 @@ def run(category, case_id, verbose):
     results_dir = base_dir / "results"
 
     runner = EvalRunner(cases_dir, results_dir)
-    report = asyncio.run(
-        runner.run_suite(category=category, case_ids=list(case_id) if case_id else None)
-    )
+    report = asyncio.run(runner.run_suite(category=category, case_ids=list(case_id) if case_id else None))
 
     print(f"\n{'=' * 60}")
-    print(f"[REPORT] Evaluation Report")
+    print("[REPORT] Evaluation Report")
     print(f"{'=' * 60}")
     print(f"Total: {report.total_cases}")
     if report.total_cases > 0:
-        print(f"Passed: {report.passed} ({report.passed/report.total_cases*100:.1f}%)")
-        print(f"Failed: {report.failed} ({report.failed/report.total_cases*100:.1f}%)")
+        print(f"Passed: {report.passed} ({report.passed / report.total_cases * 100:.1f}%)")
+        print(f"Failed: {report.failed} ({report.failed / report.total_cases * 100:.1f}%)")
     else:
         print(f"Passed: {report.passed}")
         print(f"Failed: {report.failed}")
@@ -92,12 +93,12 @@ def run(category, case_id, verbose):
     print(f"Execution Time: {report.execution_time:.2f}s")
 
     if report.category_scores:
-        print(f"\n[SCORES] Category Scores:")
+        print("\n[SCORES] Category Scores:")
         for cat, score in report.category_scores.items():
             print(f"  {cat}: {score:.3f}")
 
     if verbose and report.results:
-        print(f"\n[DETAILS] Detailed Results:")
+        print("\n[DETAILS] Detailed Results:")
         for result in report.results:
             print(f"\n  [{result.case_id}]")
             print(f"    Status: {result.status.value}")

@@ -13,15 +13,15 @@ from typing import Any, Literal, Mapping, Protocol
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.config import (
-    get_otel_enabled,
-    get_otel_environment,
-    get_otel_service_name,
     get_observability_enabled,
     get_observability_log_level,
     get_observability_max_field_chars,
     get_observability_max_jsonl_bytes_per_event,
     get_observability_trace_jsonl_dir,
     get_observability_trace_jsonl_enabled,
+    get_otel_enabled,
+    get_otel_environment,
+    get_otel_service_name,
     get_prometheus_enabled,
     get_prometheus_histogram_buckets,
 )
@@ -103,8 +103,7 @@ class ObservationEvent:
 
 
 class ObservationSink(Protocol):
-    def emit(self, event: ObservationEvent) -> None:
-        ...
+    def emit(self, event: ObservationEvent) -> None: ...
 
 
 class NoopObservationSink:
@@ -313,7 +312,9 @@ class PrometheusObservationSink:
             self._record_tool(sanitized)
         elif sanitized.event == "rag.retrieve":
             self._record_rag(sanitized)
-        elif sanitized.event.startswith("artifact.") or "generation" in sanitized.event or "revision" in sanitized.event:
+        elif (
+            sanitized.event.startswith("artifact.") or "generation" in sanitized.event or "revision" in sanitized.event
+        ):
             self._record_artifact(sanitized)
         elif sanitized.event.startswith("file.ingestion"):
             self._record_file_ingestion(sanitized)
@@ -336,12 +337,12 @@ class PrometheusObservationSink:
                 model=labels["model"],
                 status=labels["status"],
             ).observe(event.duration_ms / 1000)
-        for field, token_type in (
+        for field_name, token_type in (
             ("input_tokens", "input"),
             ("output_tokens", "output"),
             ("total_tokens", "total"),
         ):
-            value = event.fields.get(field)
+            value = event.fields.get(field_name)
             if isinstance(value, int):
                 self._llm_tokens.labels(model=labels["model"], token_type=token_type).inc(value)
 
@@ -601,11 +602,7 @@ def extract_token_usage(message_or_response: Any) -> dict[str, Any]:
     metadata = getattr(message_or_response, "response_metadata", None)
     token_usage = None
     if isinstance(metadata, Mapping):
-        token_usage = (
-            metadata.get("token_usage")
-            or metadata.get("usage")
-            or metadata.get("usage_metadata")
-        )
+        token_usage = metadata.get("token_usage") or metadata.get("usage") or metadata.get("usage_metadata")
     if isinstance(token_usage, Mapping):
         return _normalize_token_usage(
             token_usage,
@@ -1050,7 +1047,9 @@ def _normalize_label_value(value: str) -> str:
     return normalized[:80] or "unknown"
 
 
-def _get_or_create_prom_metric(name: str, metric_cls: Any, documentation: str, labelnames: tuple[str, ...], **kwargs: Any) -> Any:
+def _get_or_create_prom_metric(
+    name: str, metric_cls: Any, documentation: str, labelnames: tuple[str, ...], **kwargs: Any
+) -> Any:
     registry = kwargs.get("registry")
     if registry is not None:
         existing = getattr(registry, "_names_to_collectors", {}).get(name)

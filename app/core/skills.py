@@ -9,12 +9,12 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
-from pydantic import BaseModel, Field, field_validator
+
+import yaml
 from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
-
-import yaml
+from pydantic import BaseModel, Field, field_validator
 
 from app.config import get_skills_root
 from app.core.observability import (
@@ -132,7 +132,7 @@ def _split_frontmatter(raw_text: str, *, source: Path) -> tuple[dict[str, object
         raise SkillValidationError(f"{source} has an unclosed YAML frontmatter block.")
 
     frontmatter_text = raw_text[4:end_index]
-    body = raw_text[end_index + len(delimiter):].lstrip("\r\n")
+    body = raw_text[end_index + len(delimiter) :].lstrip("\r\n")
 
     data = yaml.safe_load(frontmatter_text) or {}
     if not isinstance(data, dict):
@@ -150,9 +150,7 @@ def _validate_skill_name(name: object, *, source: Path) -> str:
         )
     lowered = name.lower()
     if any(term in lowered for term in RESERVED_SKILL_TERMS):
-        raise SkillValidationError(
-            f"{source} has invalid skill name '{name}'. Reserved terms are not allowed."
-        )
+        raise SkillValidationError(f"{source} has invalid skill name '{name}'. Reserved terms are not allowed.")
     return name
 
 
@@ -163,9 +161,7 @@ def _validate_skill_description(description: object, *, source: Path) -> str:
     if not description:
         raise SkillValidationError(f"{source} frontmatter field 'description' must not be empty.")
     if len(description) > 1024:
-        raise SkillValidationError(
-            f"{source} frontmatter field 'description' exceeds 1024 characters."
-        )
+        raise SkillValidationError(f"{source} frontmatter field 'description' exceeds 1024 characters.")
     return description
 
 
@@ -173,16 +169,12 @@ def _validate_skill_compatibility(compatibility: object, *, source: Path) -> str
     if compatibility is None:
         return None
     if not isinstance(compatibility, str):
-        raise SkillValidationError(
-            f"{source} frontmatter field 'compatibility' must be a string when provided."
-        )
+        raise SkillValidationError(f"{source} frontmatter field 'compatibility' must be a string when provided.")
     normalized = compatibility.strip()
     if not normalized:
         return None
     if len(normalized) > 2048:
-        raise SkillValidationError(
-            f"{source} frontmatter field 'compatibility' exceeds 2048 characters."
-        )
+        raise SkillValidationError(f"{source} frontmatter field 'compatibility' exceeds 2048 characters.")
     return normalized
 
 
@@ -190,9 +182,7 @@ def _validate_skill_metadata_map(value: object, *, source: Path) -> dict[str, st
     if value is None:
         return None
     if not isinstance(value, dict):
-        raise SkillValidationError(
-            f"{source} frontmatter field 'metadata' must be a mapping when provided."
-        )
+        raise SkillValidationError(f"{source} frontmatter field 'metadata' must be a mapping when provided.")
 
     normalized: dict[str, str] = {}
     for key, item in value.items():
@@ -215,17 +205,13 @@ def _normalize_allowed_tools(value: object, *, source: Path) -> tuple[str, ...]:
     elif isinstance(value, (list, tuple)):
         raw_values = [str(item).strip() for item in value if str(item).strip()]
     else:
-        raise SkillValidationError(
-            f"{source} frontmatter field 'allowed-tools' must be a string or list of strings."
-        )
+        raise SkillValidationError(f"{source} frontmatter field 'allowed-tools' must be a string or list of strings.")
 
     seen: set[str] = set()
     allowed_tools: list[str] = []
     for item in raw_values:
         if not SKILL_ALLOWED_TOOL_PATTERN.fullmatch(item):
-            raise SkillValidationError(
-                f"{source} has invalid allowed tool '{item}'."
-            )
+            raise SkillValidationError(f"{source} has invalid allowed tool '{item}'.")
         if item in seen:
             continue
         seen.add(item)
@@ -324,9 +310,8 @@ def _script_command_for_path(script_path: Path) -> list[str]:
         return ["sh", str(script_path)]
     if os.access(script_path, os.X_OK):
         return [str(script_path)]
-    raise SkillValidationError(
-        f"Unsupported script type '{script_path.suffix or '<none>'}' for {script_path.name}."
-    )
+    raise SkillValidationError(f"Unsupported script type '{script_path.suffix or '<none>'}' for {script_path.name}.")
+
 
 def _format_file_listing(title: str, files: tuple[str, ...]) -> str:
     if not files:
@@ -348,6 +333,7 @@ def _format_allowed_tools_listing(allowed_tools: tuple[str, ...]) -> str:
     if not allowed_tools:
         return "Allowed tools: none"
     return "Allowed tools: " + ", ".join(allowed_tools)
+
 
 def _normalize_script_args(value: object) -> list[str] | None:
     if value is None:
@@ -379,6 +365,7 @@ def _normalize_script_args(value: object) -> list[str] | None:
 
     return [str(value)]
 
+
 class RunSkillScriptInput(BaseModel):
     skill_name: str
     script_path: str
@@ -394,6 +381,7 @@ class RunSkillScriptInput(BaseModel):
     @classmethod
     def validate_script_args(cls, value: object) -> list[str] | None:
         return _normalize_script_args(value)
+
 
 class SkillToolset:
     """Registry-backed tools that implement progressive skill disclosure."""
@@ -463,7 +451,7 @@ class SkillToolset:
                     },
                 )
                 return str(exc)
-            
+
             sections = [
                 f"Loaded skill: {canonical_name}",
                 f"Description: {skill.description}",
@@ -557,10 +545,7 @@ class SkillToolset:
                 },
             )
 
-            return (
-                f"Loaded resource: {canonical_name}/{relative_path}\n\n"
-                f"{content}"
-            )
+            return f"Loaded resource: {canonical_name}/{relative_path}\n\n{content}"
 
         @tool(args_schema=RunSkillScriptInput)
         def run_skill_script(
@@ -570,7 +555,7 @@ class SkillToolset:
         ) -> str:
             """Execute a script from the skill's scripts directory.
 
-            Use this for tasks that need to run scripts of specific skill. 
+            Use this for tasks that need to run scripts of specific skill.
             script_path as a relative path like: 'scripts/one_script.py'
             Pass optional script arguments with `script_args`, ideally as a JSON array of strings.
             """
@@ -634,7 +619,6 @@ class SkillRegistry:
     ) -> None:
         self.root_path = root_path.resolve()
         self._skills = dict(sorted(skills.items()))
-        
 
     @classmethod
     def from_root(
@@ -653,9 +637,7 @@ class SkillRegistry:
                 continue
             definition = _build_skill_definition(skill_dir)
             if definition.name in skills:
-                raise SkillValidationError(
-                    f"Duplicate skill name '{definition.name}' found in {skill_dir}."
-                )
+                raise SkillValidationError(f"Duplicate skill name '{definition.name}' found in {skill_dir}.")
             skills[definition.name] = definition
 
         return cls(root_path=resolved_root, skills=skills)
@@ -717,9 +699,7 @@ class SkillRegistry:
         try:
             resolved_path.relative_to(scripts_root)
         except ValueError as exc:
-            raise SkillValidationError(
-                "Only files inside the skill's scripts/ directory may be executed."
-            ) from exc
+            raise SkillValidationError("Only files inside the skill's scripts/ directory may be executed.") from exc
         if not resolved_path.is_file():
             raise SkillValidationError(f"Skill script '{script_path}' was not found.")
 

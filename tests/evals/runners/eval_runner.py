@@ -1,4 +1,5 @@
 """评估运行器"""
+
 from __future__ import annotations
 
 import json
@@ -12,10 +13,10 @@ import yaml
 from app.core.evaluation import EvalCase, EvalCaseStatus, EvalReport, EvalResult
 from tests.evals.evaluators import (
     BaseEvaluator,
+    ContextCompressionEvaluator,
+    ExtractionEvaluator,
     IntentEvaluator,
     MemoryEvaluator,
-    ExtractionEvaluator,
-    ContextCompressionEvaluator,
 )
 
 
@@ -53,9 +54,7 @@ class EvalRunner:
 
         return cases
 
-    async def run_suite(
-        self, category: Optional[str] = None, case_ids: Optional[list[str]] = None
-    ) -> EvalReport:
+    async def run_suite(self, category: Optional[str] = None, case_ids: Optional[list[str]] = None) -> EvalReport:
         """运行评估套件"""
         cases = self.load_cases(category)
 
@@ -104,9 +103,7 @@ class EvalRunner:
 
         return report
 
-    def _generate_report(
-        self, results: list[EvalResult], exec_time: float, cases: list[EvalCase]
-    ) -> EvalReport:
+    def _generate_report(self, results: list[EvalResult], exec_time: float, cases: list[EvalCase]) -> EvalReport:
         """生成评估报告"""
         passed = sum(1 for r in results if r.status == EvalCaseStatus.PASSED)
         failed = sum(1 for r in results if r.status == EvalCaseStatus.FAILED)
@@ -123,9 +120,7 @@ class EvalRunner:
                     category_scores[case.category] = []
                 category_scores[case.category].append(result.score)
 
-        category_avg_scores = {
-            cat: sum(scores) / len(scores) for cat, scores in category_scores.items()
-        }
+        category_avg_scores = {cat: sum(scores) / len(scores) for cat, scores in category_scores.items()}
 
         return EvalReport(
             suite_id=f"eval_{int(time.time())}",
