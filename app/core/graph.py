@@ -28,7 +28,6 @@ from app.core.llm import (
 )
 from app.core.memory import (
     MemoryRuntimeContext,
-    build_memory_system_message,
     choose_relevant_experience_memories,
     format_profile_memory_context,
     profile_namespace,
@@ -40,11 +39,10 @@ from app.core.memory import (
 from app.core.observability import (
     ObservationSink,
     RunContext,
-    categorize_error,
     extract_token_usage,
     get_observation_sink,
-    observe_llm_call,
     observation_sink_from_config,
+    observe_llm_call,
     record_metric,
     run_context_from_config,
     sanitize_observation_fields,
@@ -144,6 +142,7 @@ REVISION_VERBS = (
 )
 REVISION_ALL_KEYWORDS = ("全部", "都", "所有", "一起", "all", "both", "三个")
 
+
 class ConversationRoute(BaseModel):
     intent: Literal["normal_chat", "teaching_plan", "artifact_revision"] = Field(
         description="User intent for the conversation turn.",
@@ -192,12 +191,7 @@ def build_input_messages(
     messages: list[BaseMessage] = []
     if attachment_text:
         messages.append(
-            SystemMessage(
-                content=(
-                    f"{ATTACHMENT_MESSAGE_PREFIX}{attachment_text}\n"
-                    f"附件存储路径：{attachment_paths}"
-                )
-            )
+            SystemMessage(content=(f"{ATTACHMENT_MESSAGE_PREFIX}{attachment_text}\n附件存储路径：{attachment_paths}"))
         )
     messages.append(HumanMessage(content=message))
     return messages
@@ -302,19 +296,11 @@ def _to_prompt_json(value: Any) -> str:
 
 
 def _structured_model_name(model: Any) -> str:
-    return str(
-        getattr(model, "model_name", None)
-        or getattr(model, "model", None)
-        or "unknown"
-    )
+    return str(getattr(model, "model_name", None) or getattr(model, "model", None) or "unknown")
 
 
 def _structured_base_url(model: Any) -> str:
-    return str(
-        getattr(model, "openai_api_base", None)
-        or getattr(model, "base_url", None)
-        or ""
-    )
+    return str(getattr(model, "openai_api_base", None) or getattr(model, "base_url", None) or "")
 
 
 def _structured_provider_tag(model: Any) -> str:
@@ -327,11 +313,7 @@ def _structured_provider_tag(model: Any) -> str:
 
 
 def _estimate_input_size(messages: Sequence[BaseMessage]) -> int:
-    return sum(
-        len(_message_to_text(message))
-        for message in messages
-        if isinstance(message, (AIMessage, HumanMessage))
-    )
+    return sum(len(_message_to_text(message)) for message in messages if isinstance(message, (AIMessage, HumanMessage)))
 
 
 def _estimate_output_size(response: Any) -> int:
@@ -412,6 +394,7 @@ def _graph_node_summary(
 
 def _observed_graph_node(node_name: str, func: Callable[..., Any]) -> Callable[..., Any]:
     if inspect.iscoroutinefunction(func):
+
         async def async_wrapper(
             state: TeachingAssistantState,
             config: Optional[RunnableConfig] = None,
@@ -617,10 +600,7 @@ def _infer_revision_targets_from_text(
 ) -> tuple[str | None, list[str], bool]:
     available_types = [
         artifact_type
-        for artifact_type in (
-            str(item.get("type") or "")
-            for item in artifact_catalog
-        )
+        for artifact_type in (str(item.get("type") or "") for item in artifact_catalog)
         if artifact_type in ARTIFACT_TYPE_LABELS
     ]
     unique_available_types = list(dict.fromkeys(available_types))
@@ -726,11 +706,7 @@ def _latest_human_messages(
     *,
     limit: int,
 ) -> list[HumanMessage]:
-    human_messages = [
-        message
-        for message in state.get("messages", [])
-        if isinstance(message, HumanMessage)
-    ]
+    human_messages = [message for message in state.get("messages", []) if isinstance(message, HumanMessage)]
     if limit <= 0:
         return []
     return human_messages[-limit:]
@@ -743,15 +719,11 @@ def build_metadata_extraction_messages(state: TeachingAssistantState) -> list[Ba
         limit=2 if current_metadata else 1,
     )
     latest_message = _message_to_text(recent_human_messages[-1]).strip() if recent_human_messages else ""
-    previous_message = (
-        _message_to_text(recent_human_messages[-2]).strip()
-        if len(recent_human_messages) > 1
-        else ""
-    )
+    previous_message = _message_to_text(recent_human_messages[-2]).strip() if len(recent_human_messages) > 1 else ""
     payload_lines = [
         f"Current metadata JSON:\n{_to_prompt_json(current_metadata)}",
         f"Latest user's message:\n{latest_message or '<empty>'}",
-        f"Latest ai assistant's message:\n{[msg for msg in state["messages"] if isinstance(msg, AIMessage)][-2:] or '<empty>'}",
+        f"Latest ai assistant's message:\n{[msg for msg in state['messages'] if isinstance(msg, AIMessage)][-2:] or '<empty>'}",
     ]
     if previous_message:
         payload_lines.append(f"Recent clarification message:\n{previous_message}")
@@ -762,11 +734,7 @@ def build_metadata_extraction_messages(state: TeachingAssistantState) -> list[Ba
 
 
 def _build_intent_router_messages(state: TeachingAssistantState) -> list[BaseMessage]:
-    recent_messages = [
-        message
-        for message in state["messages"]
-        if isinstance(message, (HumanMessage, AIMessage))
-    ][-4:]
+    recent_messages = [message for message in state["messages"] if isinstance(message, (HumanMessage, AIMessage))][-4:]
     return [
         SystemMessage(content=INTENT_ROUTER_SYSTEM_PROMPT),
         HumanMessage(content=f"Current thread artifacts:\n{_artifact_catalog_summary(state)}"),
@@ -788,7 +756,7 @@ def metadata_review_interrupt_node(
     )
     if _is_approve_action(user_input):
         if reporter:
-                reporter.emit("metadata_review", "success", detail="已确认教学要素")
+            reporter.emit("metadata_review", "success", detail="已确认教学要素")
         return Command(goto="teaching_design_memory_retrieval_node")
     # if reporter:
     #             reporter.emit("metadata_review", "success", detail="已修改教学要素")
@@ -989,7 +957,7 @@ async def normal_chat_node(
     state: TeachingAssistantState,
     config: Optional[RunnableConfig] = None,
 ):
-    system_prompt="""
+    system_prompt = """
     你是一个面向老师备课与教学设计的智能助手，可以回答日常问题，或者帮助老师进行备课与教学设计。
     当用户问你有什么能力的时候，参考这样的回答：
     “我可以帮助你查资料、整理知识点、设计教学目标、撰写教案、制作PPT、设计生成课堂互动内容等。
@@ -1030,11 +998,7 @@ def metadata_structer_node(
             reporter.emit(
                 "metadata_structuring",
                 "success",
-                detail=(
-                    "已提取结构化教学要素"
-                    if response.get("is_complete")
-                    else "已提取结构化信息，仍需补充"
-                ),
+                detail=("已提取结构化教学要素" if response.get("is_complete") else "已提取结构化信息，仍需补充"),
             )
         return {"teaching_metadata": response}
     except Exception as exc:
@@ -1169,9 +1133,7 @@ def interrupt_for_userinput(state: TeachingAssistantState):
 def _build_rag_query(state: TeachingAssistantState) -> str:
     metadata = state.get("teaching_metadata") or {}
     human_messages = [
-        _message_to_text(msg).strip()
-        for msg in state.get("messages", [])
-        if isinstance(msg, HumanMessage)
+        _message_to_text(msg).strip() for msg in state.get("messages", []) if isinstance(msg, HumanMessage)
     ]
     query_parts = [
         f"教学元数据: {json.dumps(metadata, ensure_ascii=False)}",
@@ -1238,11 +1200,13 @@ def teaching_plan_review_interrupt_node(
             reporter.emit("teaching_plan_review", "success", detail="已确认教学设计")
         return Command(
             update=_generation_result_reset_update(selected_types),
-            goto=_clean_goto_nodes([
-                "ppt_generate_node" if "ppt" in selected_types else None,
-                "docx_generate_node" if "docx" in selected_types else None,
-                "html_game_generate_node" if "html-game" in selected_types else None,
-            ]),
+            goto=_clean_goto_nodes(
+                [
+                    "ppt_generate_node" if "ppt" in selected_types else None,
+                    "docx_generate_node" if "docx" in selected_types else None,
+                    "html_game_generate_node" if "html-game" in selected_types else None,
+                ]
+            ),
         )
     return Command(
         update=_build_resume_message_update(user_input),
@@ -1279,11 +1243,7 @@ def artifact_revision_router_node(
             reporter.emit("artifact_revision_routing", "success", detail="修改目标不明确，等待用户澄清")
         return Command(goto=ARTIFACT_REVISION_CLARIFICATION_NODE)
 
-    selected_artifacts = [
-        artifact
-        for artifact in artifact_catalog
-        if str(artifact.get("type") or "") in target_types
-    ]
+    selected_artifacts = [artifact for artifact in artifact_catalog if str(artifact.get("type") or "") in target_types]
     if not selected_artifacts:
         if reporter:
             reporter.emit("artifact_revision_routing", "failed", detail="未找到匹配的产物")
@@ -1313,11 +1273,15 @@ def artifact_revision_router_node(
     if len(selected_artifacts) > 1:
         return Command(
             update=update,
-            goto=_clean_goto_nodes([
-                "ppt_revision_node" if any(item.get("type") == "ppt" for item in selected_artifacts) else None,
-                "docx_revision_node" if any(item.get("type") == "docx" for item in selected_artifacts) else None,
-                "html_game_revision_node" if any(item.get("type") == "html-game" for item in selected_artifacts) else None,
-            ]),
+            goto=_clean_goto_nodes(
+                [
+                    "ppt_revision_node" if any(item.get("type") == "ppt" for item in selected_artifacts) else None,
+                    "docx_revision_node" if any(item.get("type") == "docx" for item in selected_artifacts) else None,
+                    "html_game_revision_node"
+                    if any(item.get("type") == "html-game" for item in selected_artifacts)
+                    else None,
+                ]
+            ),
         )
 
     target_type = str(selected_artifacts[0].get("type") or "")
@@ -1358,11 +1322,15 @@ def artifact_revision_clarification_interrupt_node(
                 "iteration_count": int(state.get("iteration_count") or 0) + 1,
                 **_revision_result_reset_update(selected_artifacts),
             },
-            goto=_clean_goto_nodes([
-                "ppt_revision_node" if any(item.get("type") == "ppt" for item in selected_artifacts) else None,
-                "docx_revision_node" if any(item.get("type") == "docx" for item in selected_artifacts) else None,
-                "html_game_revision_node" if any(item.get("type") == "html-game" for item in selected_artifacts) else None,
-            ]),
+            goto=_clean_goto_nodes(
+                [
+                    "ppt_revision_node" if any(item.get("type") == "ppt" for item in selected_artifacts) else None,
+                    "docx_revision_node" if any(item.get("type") == "docx" for item in selected_artifacts) else None,
+                    "html_game_revision_node"
+                    if any(item.get("type") == "html-game" for item in selected_artifacts)
+                    else None,
+                ]
+            ),
         )
     return Command(
         update=_build_resume_message_update(user_input),
@@ -1384,38 +1352,27 @@ def _result_summary_line(result: Mapping[str, Any] | None) -> str | None:
         return f"{label}处理失败：{error}"
     return None
 
+
 async def artifact_fan_in_node(state: TeachingAssistantState, config: Optional[RunnableConfig] = None):
     reporter = emit_progress(config, "artifact_fan_in", "running")
     is_revision = bool(state.get("revision_source_artifacts"))
     if is_revision:
-        target_types = [
-            str(artifact.get("type") or "")
-            for artifact in (state.get("revision_source_artifacts") or [])
-        ]
+        target_types = [str(artifact.get("type") or "") for artifact in (state.get("revision_source_artifacts") or [])]
     else:
         target_types = _normalize_generation_targets(state.get("generation_targets"))
 
     results = [
         state.get(result_key)
-        for result_key in (
-            _result_key_for_artifact_type(artifact_type)
-            for artifact_type in target_types
-        )
+        for result_key in (_result_key_for_artifact_type(artifact_type) for artifact_type in target_types)
         if result_key
     ]
-    summary_lines = [
-        line
-        for line in (_result_summary_line(result) for result in results)
-        if line
-    ]
+    summary_lines = [line for line in (_result_summary_line(result) for result in results) if line]
     if not summary_lines:
         return {}
 
     header = "产物修改结果如下：" if is_revision else "产物生成结果如下："
     finished_results = [
-        result
-        for result in results
-        if isinstance(result, Mapping) and result.get("status") in {"ready", "failed"}
+        result for result in results if isinstance(result, Mapping) and result.get("status") in {"ready", "failed"}
     ]
     if reporter:
         reporter.emit("artifact_fan_in", "success", detail="已汇总产物处理结果")
@@ -1513,14 +1470,21 @@ def build_agent_graph(
     agent_builder.add_node("normal_chat_node", normal_chat_node)
     agent_builder.add_node("profile_memory_reflection_node", profile_memory_reflection_node)
     agent_builder.add_node("experience_memory_reflection_node", experience_memory_reflection_node)
-    agent_builder.add_node("metadata_structer_node", _observed_graph_node("metadata_structer_node", metadata_structer_node))
+    agent_builder.add_node(
+        "metadata_structer_node", _observed_graph_node("metadata_structer_node", metadata_structer_node)
+    )
     agent_builder.add_node("follow_up_questioner", follow_up_questioner)
     agent_builder.add_node(INTERRUPT_FOR_USERINPUT_NODE, interrupt_for_userinput)
     agent_builder.add_node(METADATA_REVIEW_INTERRUPT_NODE, metadata_review_interrupt_node)
     agent_builder.add_node("rag_retrieval_node", _observed_graph_node("rag_retrieval_node", rag_retrieval_node))
-    agent_builder.add_node("teaching_design_planner", _observed_graph_node("teaching_design_planner", teaching_design_planner))
+    agent_builder.add_node(
+        "teaching_design_planner", _observed_graph_node("teaching_design_planner", teaching_design_planner)
+    )
     agent_builder.add_node(TEACHING_PLAN_REVIEW_INTERRUPT_NODE, teaching_plan_review_interrupt_node)
-    agent_builder.add_node("artifact_revision_router_node", _observed_graph_node("artifact_revision_router_node", artifact_revision_router_node))
+    agent_builder.add_node(
+        "artifact_revision_router_node",
+        _observed_graph_node("artifact_revision_router_node", artifact_revision_router_node),
+    )
     agent_builder.add_node(ARTIFACT_REVISION_CLARIFICATION_NODE, artifact_revision_clarification_interrupt_node)
     agent_builder.add_node("ppt_generate_node", ppt_generate_node)
     agent_builder.add_node("docx_generate_node", docx_generate_node)

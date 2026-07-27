@@ -45,8 +45,7 @@ class TeachingAssistantState(TypedDict):
     game_result: NotRequired[SubAgentResult]
     user_feedback: NotRequired[str | None]
     feedback_type: NotRequired[
-        Literal["approve", "modify_ppt", "modify_lesson_plan", "modify_game", "modify_all"]
-        | None
+        Literal["approve", "modify_ppt", "modify_lesson_plan", "modify_game", "modify_all"] | None
     ]
     revision_targets: NotRequired[list[dict[str, Any]]]
     revision_source_artifacts: NotRequired[list[dict[str, Any]]]

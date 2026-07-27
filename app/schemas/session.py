@@ -11,15 +11,19 @@ class Session(BaseModel):
     thread_id: str
     plan_id: int
 
+
 class SessionResponse(BaseResponse[Session]):
     pass
+
 
 class SessionRequest(BaseModel):
     name: str
     plan_id: int
 
+
 class Messages(BaseModel):
     messages: list[dict]
+
 
 class MessagesResponse(BaseResponse[Messages]):
     pass

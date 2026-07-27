@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-from io import BytesIO
 import zipfile
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 
 from fastapi import UploadFile
 from langchain_core.documents import Document
 
-from app.core.storage import LOCAL_STORAGE_BACKEND, reset_storage_service_for_tests
 from app.core.rag import RagRuntime
+from app.core.storage import LOCAL_STORAGE_BACKEND, reset_storage_service_for_tests
 from app.models.file import KnowledgeFile
 from app.services import file_service
 
@@ -62,12 +62,7 @@ def _create_minimal_docx(path: Path, paragraphs: list[str]) -> None:
     {paragraphs}
   </w:body>
 </w:document>
-""".format(
-        paragraphs="".join(
-            f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
-            for text in paragraphs
-        )
-    )
+""".format(paragraphs="".join(f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>" for text in paragraphs))
 
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("word/document.xml", document_xml)

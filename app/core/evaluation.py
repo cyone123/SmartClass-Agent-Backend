@@ -1,4 +1,5 @@
 """评估系统核心模块"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -10,6 +11,7 @@ from pydantic import BaseModel, Field
 
 class EvalCaseStatus(str, Enum):
     """评估用例状态"""
+
     PENDING = "pending"
     RUNNING = "running"
     PASSED = "passed"
@@ -19,6 +21,7 @@ class EvalCaseStatus(str, Enum):
 
 class AssertionType(str, Enum):
     """断言类型"""
+
     ROUTE_MATCH = "route_match"
     CONTAINS = "contains"
     NOT_CONTAINS = "not_contains"
@@ -33,6 +36,7 @@ class AssertionType(str, Enum):
 
 class EvalAssertion(BaseModel):
     """评估断言"""
+
     type: AssertionType
     field: str
     expected: Any
@@ -47,6 +51,7 @@ class EvalAssertion(BaseModel):
 
 class EvalCase(BaseModel):
     """评估用例"""
+
     case_id: str
     category: str
     description: str
@@ -61,6 +66,7 @@ class EvalCase(BaseModel):
 
 class EvalResult(BaseModel):
     """评估结果"""
+
     case_id: str
     run_id: str
     status: EvalCaseStatus
@@ -75,6 +81,7 @@ class EvalResult(BaseModel):
 
 class EvalReport(BaseModel):
     """评估报告"""
+
     suite_id: str
     total_cases: int
     passed: int

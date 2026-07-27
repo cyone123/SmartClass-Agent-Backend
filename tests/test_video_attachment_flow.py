@@ -11,9 +11,9 @@ from httpx import ASGITransport, AsyncClient
 
 from app.api.chat import router as chat_router
 from app.core.agent import AgentRuntime
+from app.core.auth import get_current_user
 from app.core.progress import ProgressReporter, ProgressTracker
 from app.core.speech import TranscriptionResult
-from app.core.auth import get_current_user
 from app.core.video_transcribe import VideoTranscriptionRuntime, VideoVisionConfig
 from app.dependencies.db import get_db
 from app.models.file import AttachmentFile
@@ -432,7 +432,9 @@ def test_video_transcription_runtime_surfaces_missing_ffmpeg(tmp_path) -> None:
         raise AssertionError("Expected missing ffmpeg error.")
 
 
-def test_video_transcription_runtime_surfaces_invocation_error_when_runner_has_empty_message(tmp_path, monkeypatch) -> None:
+def test_video_transcription_runtime_surfaces_invocation_error_when_runner_has_empty_message(
+    tmp_path, monkeypatch
+) -> None:
     input_path = tmp_path / "lesson.mp4"
     input_path.write_bytes(b"video")
 

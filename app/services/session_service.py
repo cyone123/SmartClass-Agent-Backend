@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, status
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from sqlalchemy import delete, select, update
 from uuid_utils import uuid4
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from app.models.session import Session
 from app.services.plan_service import ensure_owned_plan
@@ -33,6 +33,7 @@ async def get_session_by_thread_id(db, thread_id, *, user_id: int | None = None)
     result = await db.execute(query)
     return result.scalar_one_or_none()
 
+
 async def ensure_owned_session_by_thread_id(db, thread_id: str, *, user_id: int) -> Session:
     session = await get_session_by_thread_id(db, thread_id, user_id=user_id)
     if session is None:
@@ -41,6 +42,7 @@ async def ensure_owned_session_by_thread_id(db, thread_id: str, *, user_id: int)
             detail=f"Thread {thread_id} not found.",
         )
     return session
+
 
 async def ensure_owned_session_by_id(db, session_id: int, *, user_id: int) -> Session:
     stmt = select(Session).where(Session.id == session_id, Session.user_id == user_id)

@@ -53,9 +53,7 @@ class FakeArtifactRunnable:
             "type": "updates",
             "data": {
                 "model": {
-                    "messages": [
-                        AIMessage(content="Updated the deck and wrote the final file to AGENT_OUTPUT_DIR.")
-                    ]
+                    "messages": [AIMessage(content="Updated the deck and wrote the final file to AGENT_OUTPUT_DIR.")]
                 }
             },
         }
@@ -141,6 +139,6 @@ def test_chat_stream_forwards_artifact_trace_events() -> None:
 
         assert response.status_code == 200
         assert "event: artifact_trace" in response.text
-        assert "\"artifact_run_id\": \"run-1-ppt\"" in response.text
+        assert '"artifact_run_id": "run-1-ppt"' in response.text
 
     asyncio.run(run())

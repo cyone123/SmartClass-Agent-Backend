@@ -6,7 +6,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.response import BaseResponse
 
-
 MemoryKind = Literal["profile", "experience"]
 
 
@@ -52,4 +51,3 @@ class MemoryUpdateRequest(BaseModel):
     summary: str | None = None
     content: str | None = None
     tags: list[str] | None = None
-

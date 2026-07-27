@@ -78,7 +78,9 @@ def test_metadata_structer_node_uses_fast_model_without_fallback(monkeypatch) ->
     monkeypatch.setattr(graph_module, "metadata_extractor", fast_runnable)
     monkeypatch.setattr(graph_module, "metadata_extractor_fallback", fallback_runnable)
     monkeypatch.setattr(graph_module, "structured_fast_llm", FakeModel("fast-model", "https://fast.example.com/v1"))
-    monkeypatch.setattr(graph_module, "structured_output_llm", FakeModel("fallback-model", "https://fallback.example.com/v1"))
+    monkeypatch.setattr(
+        graph_module, "structured_output_llm", FakeModel("fallback-model", "https://fallback.example.com/v1")
+    )
     monkeypatch.setattr(graph_module, "is_structured_fallback_enabled", lambda: True)
     graph_module.STRUCTURED_SCHEMA_CALL_COUNTS.clear()
 
@@ -113,7 +115,9 @@ def test_metadata_structer_node_falls_back_when_fast_model_fails(monkeypatch) ->
     monkeypatch.setattr(graph_module, "metadata_extractor", fast_runnable)
     monkeypatch.setattr(graph_module, "metadata_extractor_fallback", fallback_runnable)
     monkeypatch.setattr(graph_module, "structured_fast_llm", FakeModel("fast-model", "https://fast.example.com/v1"))
-    monkeypatch.setattr(graph_module, "structured_output_llm", FakeModel("fallback-model", "https://fallback.example.com/v1"))
+    monkeypatch.setattr(
+        graph_module, "structured_output_llm", FakeModel("fallback-model", "https://fallback.example.com/v1")
+    )
     monkeypatch.setattr(graph_module, "is_structured_fallback_enabled", lambda: True)
     graph_module.STRUCTURED_SCHEMA_CALL_COUNTS.clear()
 
@@ -141,7 +145,9 @@ def test_intent_router_node_falls_back_to_reliable_model(monkeypatch) -> None:
     monkeypatch.setattr(graph_module, "router", fast_router)
     monkeypatch.setattr(graph_module, "router_fallback", fallback_router)
     monkeypatch.setattr(graph_module, "structured_fast_llm", FakeModel("fast-model", "https://fast.example.com/v1"))
-    monkeypatch.setattr(graph_module, "structured_output_llm", FakeModel("fallback-model", "https://fallback.example.com/v1"))
+    monkeypatch.setattr(
+        graph_module, "structured_output_llm", FakeModel("fallback-model", "https://fallback.example.com/v1")
+    )
     monkeypatch.setattr(graph_module, "is_structured_fallback_enabled", lambda: True)
     graph_module.STRUCTURED_SCHEMA_CALL_COUNTS.clear()
 

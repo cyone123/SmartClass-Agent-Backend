@@ -14,7 +14,7 @@ from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_public_api_base_url, get_storage_download_mode
@@ -100,7 +100,9 @@ def _serialize_artifact(record: ArtifactFileModel, request: Request) -> dict[str
         )
     return artifact_service.serialize_artifact(
         record,
-        url=_append_access_token(download_url, access_token) if record.status == artifact_service.ARTIFACT_STATUS_READY else None,
+        url=_append_access_token(download_url, access_token)
+        if record.status == artifact_service.ARTIFACT_STATUS_READY
+        else None,
         preview_url=_append_access_token(preview_url, access_token) if preview_url else None,
     )
 
@@ -553,11 +555,15 @@ async def get_artifact_html_content(
 ):
     artifact = await _require_ready_html_artifact(db, file_id, current_user.id)
     try:
-        content = get_storage_service().read_bytes(
-            storage_backend=artifact.storage_backend,
-            storage_key=artifact.storage_key,
-            storage_path=artifact.storage_path,
-        ).decode("utf-8")
+        content = (
+            get_storage_service()
+            .read_bytes(
+                storage_backend=artifact.storage_backend,
+                storage_key=artifact.storage_key,
+                storage_path=artifact.storage_path,
+            )
+            .decode("utf-8")
+        )
     except UnicodeDecodeError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

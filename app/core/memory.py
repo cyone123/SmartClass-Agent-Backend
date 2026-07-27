@@ -177,11 +177,7 @@ def message_to_text(message: BaseMessage) -> str:
 
 
 def visible_conversation_text(messages: list[BaseMessage], *, limit: int = 12) -> str:
-    visible = [
-        message
-        for message in messages
-        if isinstance(message, (HumanMessage, AIMessage))
-    ][-limit:]
+    visible = [message for message in messages if isinstance(message, (HumanMessage, AIMessage))][-limit:]
     lines: list[str] = []
     for message in visible:
         role = "Teacher" if isinstance(message, HumanMessage) else "Assistant"
@@ -449,11 +445,7 @@ async def choose_relevant_experience_memories(
     if isinstance(raw_ids, str):
         raw_ids = [raw_ids]
 
-    selected_ids = [
-        memory_id
-        for memory_id in dict.fromkeys(str(item) for item in raw_ids)
-        if memory_id
-    ]
+    selected_ids = [memory_id for memory_id in dict.fromkeys(str(item) for item in raw_ids) if memory_id]
     if not selected_ids:
         return "", []
 
@@ -643,11 +635,7 @@ async def apply_memory_tool_call(
     content = str(args.get("content") or args.get("summary") or "").strip()
     if not content:
         return None
-    key = (
-        str(args.get("existing_id") or "").strip()
-        if tool_call["name"] == "update_memory"
-        else None
-    )
+    key = str(args.get("existing_id") or "").strip() if tool_call["name"] == "update_memory" else None
     if key == "":
         key = None
     value: MemoryItemPayload = {

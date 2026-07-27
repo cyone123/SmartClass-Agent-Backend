@@ -58,11 +58,7 @@ def _load_docx_document(file_path: str) -> list[Document]:
 
     paragraphs: list[str] = []
     for paragraph in root.findall(".//w:p", DOCX_XML_NAMESPACE):
-        parts = [
-            node.text
-            for node in paragraph.findall(".//w:t", DOCX_XML_NAMESPACE)
-            if node.text
-        ]
+        parts = [node.text for node in paragraph.findall(".//w:t", DOCX_XML_NAMESPACE) if node.text]
         text = "".join(parts).strip()
         if text:
             paragraphs.append(text)

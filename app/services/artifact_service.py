@@ -234,9 +234,7 @@ async def list_ready_current_artifacts_by_thread(
     return [
         artifact
         for artifact in result.scalars().all()
-        if artifact.thread_id == thread_id
-        and artifact.is_current
-        and artifact.status == ARTIFACT_STATUS_READY
+        if artifact.thread_id == thread_id and artifact.is_current and artifact.status == ARTIFACT_STATUS_READY
     ]
 
 
@@ -516,9 +514,13 @@ def materialize_artifact_file(artifact: ArtifactFile) -> Iterator[Path]:
 @contextlib.contextmanager
 def materialize_artifact_payload(source_artifact: dict[str, object]) -> Iterator[Path]:
     with get_storage_service().materialize_temp_file(
-        storage_backend=source_artifact.get("storage_backend") if isinstance(source_artifact.get("storage_backend"), str) else None,
+        storage_backend=source_artifact.get("storage_backend")
+        if isinstance(source_artifact.get("storage_backend"), str)
+        else None,
         storage_key=source_artifact.get("storage_key") if isinstance(source_artifact.get("storage_key"), str) else None,
-        storage_path=source_artifact.get("storage_path") if isinstance(source_artifact.get("storage_path"), str) else None,
+        storage_path=source_artifact.get("storage_path")
+        if isinstance(source_artifact.get("storage_path"), str)
+        else None,
         suffix=Path(str(source_artifact.get("original_name") or "")).suffix,
     ) as file_path:
         yield file_path

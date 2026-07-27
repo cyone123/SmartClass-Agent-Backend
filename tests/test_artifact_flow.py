@@ -118,11 +118,14 @@ def test_artifact_service_creates_persists_and_lists_artifacts(
         )
         assert ready.status == artifact_service.ARTIFACT_STATUS_READY
         assert ready.storage_key is not None
-        assert get_storage_service().read_bytes(
-            storage_backend=ready.storage_backend,
-            storage_key=ready.storage_key,
-            storage_path=ready.storage_path,
-        ) == b"<html><body>quiz</body></html>"
+        assert (
+            get_storage_service().read_bytes(
+                storage_backend=ready.storage_backend,
+                storage_key=ready.storage_key,
+                storage_path=ready.storage_path,
+            )
+            == b"<html><body>quiz</body></html>"
+        )
 
         failed = await artifact_service.create_running_artifact(
             db,
@@ -425,7 +428,7 @@ def test_file_api_supports_artifact_download_and_public_config(
             html_preview = await client.get(f"/file/preview/artifact/{artifact_html.id}")
             assert html_preview.status_code == 200
             assert html_preview.headers["content-type"].startswith("text/html")
-            assert "sandbox=\"allow-scripts allow-modals\"" in html_preview.text
+            assert 'sandbox="allow-scripts allow-modals"' in html_preview.text
             assert f"/file/content/artifact/{artifact_html.id}" in html_preview.text
 
             artifact_download = await client.get(f"/file/download/artifact/{artifact_docx.id}")

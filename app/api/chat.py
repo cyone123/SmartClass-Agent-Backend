@@ -6,16 +6,16 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import get_current_user
 from app.core.agent import AgentRuntime, get_agent_runtime
+from app.core.auth import get_current_user
 from app.core.observability import (
     RunContext,
     get_observation_sink,
     log_observation,
 )
+from app.dependencies.db import get_db
 from app.models.file import AttachmentFile
 from app.models.user import User
-from app.dependencies.db import get_db
 from app.schemas.chat import ChatRequest
 from app.services import file_service, session_service
 

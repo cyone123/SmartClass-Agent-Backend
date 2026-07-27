@@ -1,4 +1,5 @@
 """教学要素抽取质量评估器"""
+
 from __future__ import annotations
 
 import time
@@ -6,7 +7,7 @@ import uuid
 from datetime import datetime
 
 from app.core.agent import create_agent_runtime
-from app.core.evaluation import EvalCase, EvalCaseStatus, EvalResult, EvalAssertion
+from app.core.evaluation import EvalAssertion, EvalCase, EvalCaseStatus, EvalResult
 from app.core.rag import create_rag_runtime
 from app.core.skills import create_skill_registry
 from app.core.speech import create_speech_runtime
@@ -29,9 +30,7 @@ class ExtractionEvaluator(BaseEvaluator):
             rag_runtime = await create_rag_runtime()
             skill_registry = create_skill_registry()
             speech_runtime = create_speech_runtime()
-            video_runtime = create_video_transcription_runtime(
-                speech_runtime=speech_runtime
-            )
+            video_runtime = create_video_transcription_runtime(speech_runtime=speech_runtime)
 
             self._runtime = await create_agent_runtime(
                 rag_runtime=rag_runtime,
@@ -40,9 +39,7 @@ class ExtractionEvaluator(BaseEvaluator):
             )
         return self._runtime
 
-    def _check_extraction_quality(
-        self, assertion: EvalAssertion, actual: dict
-    ) -> dict:
+    def _check_extraction_quality(self, assertion: EvalAssertion, actual: dict) -> dict:
         """检查教学要素抽取质量
 
         覆写基类方法，实现具体的抽取质量检查逻辑。
@@ -62,8 +59,7 @@ class ExtractionEvaluator(BaseEvaluator):
 
         # 检查哪些字段缺失
         missing_fields = [
-            field for field in required_fields
-            if field not in teaching_metadata or teaching_metadata.get(field) is None
+            field for field in required_fields if field not in teaching_metadata or teaching_metadata.get(field) is None
         ]
 
         # 计算完整性分数
@@ -74,10 +70,7 @@ class ExtractionEvaluator(BaseEvaluator):
         is_marked_complete = teaching_metadata.get("is_complete", False)
 
         # 综合评分 = completeness_score * 0.7 + is_marked_complete * 0.3
-        score = (
-            completeness_score * 0.7 +
-            (1.0 if is_marked_complete else 0.0) * 0.3
-        )
+        score = completeness_score * 0.7 + (1.0 if is_marked_complete else 0.0) * 0.3
 
         # 判断是否通过（默认最小分数为 0.7）
         min_score = assertion.min_score or 0.7
@@ -141,11 +134,7 @@ class ExtractionEvaluator(BaseEvaluator):
             actual_output = {
                 "teaching_metadata": result.get("teaching_metadata") or {},
                 "intent": result.get("intent"),
-                "response": (
-                    result.get("messages", [])[-1].content
-                    if result.get("messages")
-                    else ""
-                ),
+                "response": (result.get("messages", [])[-1].content if result.get("messages") else ""),
                 "rag_triggered": "rag_context" in result,
             }
 
@@ -158,18 +147,12 @@ class ExtractionEvaluator(BaseEvaluator):
             # 计算加权分数
             total_weight = sum(a.weight for a in case.assertions)
             weighted_score = (
-                sum(r["score"] * r["weight"] for r in assertion_results) / total_weight
-                if total_weight > 0
-                else 0.0
+                sum(r["score"] * r["weight"] for r in assertion_results) / total_weight if total_weight > 0 else 0.0
             )
 
             # 判断是否通过（所有权重 >= 0.5 的断言必须通过）
-            all_critical_passed = all(
-                r["passed"] for r in assertion_results if r["weight"] >= 0.5
-            )
-            status = (
-                EvalCaseStatus.PASSED if all_critical_passed else EvalCaseStatus.FAILED
-            )
+            all_critical_passed = all(r["passed"] for r in assertion_results if r["weight"] >= 0.5)
+            status = EvalCaseStatus.PASSED if all_critical_passed else EvalCaseStatus.FAILED
 
             return EvalResult(
                 case_id=case.case_id,

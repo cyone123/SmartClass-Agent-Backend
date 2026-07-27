@@ -1,8 +1,8 @@
 """BaseEvaluator 单元测试"""
-import pytest
-from unittest.mock import AsyncMock
 
-from app.core.evaluation import EvalAssertion, AssertionType
+import pytest
+
+from app.core.evaluation import AssertionType, EvalAssertion
 from tests.evals.evaluators.base import BaseEvaluator
 
 
@@ -102,9 +102,7 @@ class TestCheckMemoryCheck:
 
         actual = {
             "memory": {
-                "experience": [
-                    {"title": "Math teaching strategy", "description": "Use interactive games"}
-                ],
+                "experience": [{"title": "Math teaching strategy", "description": "Use interactive games"}],
             }
         }
 
@@ -154,9 +152,7 @@ class TestCheckHallucinationCheck:
             weight=1.0,
         )
 
-        actual = {
-            "response": "The student used a fictional character named Alex to understand the concept."
-        }
+        actual = {"response": "The student used a fictional character named Alex to understand the concept."}
 
         # 执行检查
         result = evaluator._check_hallucination_check(assertion, actual)
@@ -181,9 +177,7 @@ class TestCheckHallucinationCheck:
             weight=1.0,
         )
 
-        actual = {
-            "response": "The student learned about photosynthesis in the classroom today."
-        }
+        actual = {"response": "The student learned about photosynthesis in the classroom today."}
 
         # 执行检查
         result = evaluator._check_hallucination_check(assertion, actual)
@@ -208,9 +202,7 @@ class TestCheckHallucinationCheck:
             weight=1.0,
         )
 
-        actual = {
-            "response": "The fictional and made-up scenario was used to teach the concept."
-        }
+        actual = {"response": "The fictional and made-up scenario was used to teach the concept."}
 
         # 执行检查
         result = evaluator._check_hallucination_check(assertion, actual)
@@ -233,9 +225,7 @@ class TestCheckHallucinationCheck:
             weight=1.0,
         )
 
-        actual = {
-            "response": "This is a fictional scenario."
-        }
+        actual = {"response": "This is a fictional scenario."}
 
         # 执行检查
         result = evaluator._check_hallucination_check(assertion, actual)

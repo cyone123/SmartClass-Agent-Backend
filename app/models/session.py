@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from app.models.plan import Plan
     from app.models.user import User
 
+
 class Session(Base):
     __tablename__ = "teaching_sessions"
 

@@ -145,9 +145,7 @@ def test_repeated_compression_replaces_prior_compressed_context() -> None:
 
     assert plan.should_compress is True
     assert any(message.id == "old-compressed" for message in plan.compressible_messages)
-    assert [message.id for message in added_messages if is_compressed_context_message(message)] == [
-        "new-compressed"
-    ]
+    assert [message.id for message in added_messages if is_compressed_context_message(message)] == ["new-compressed"]
 
 
 def test_replacement_update_deletes_all_messages_then_adds_summary_first() -> None:
@@ -206,9 +204,7 @@ def test_compress_state_messages_success_emits_observations_and_preserves_state(
 
         assert result.status == "success"
         assert result.update is not None
-        compressed = next(
-            message for message in result.update["messages"] if is_compressed_context_message(message)
-        )
+        compressed = next(message for message in result.update["messages"] if is_compressed_context_message(message))
         assert COMPRESSED_CONTEXT_MARKER in compressed.content
         assert "Teaching metadata" in compressed.content
         assert state["teaching_metadata"]["topic"] == "勾股定理"

@@ -14,9 +14,9 @@ from app.core.memory import (
     choose_relevant_experience_memories,
     delete_memory_item,
     experience_namespace,
-    reflect_profile_memory,
     profile_namespace,
     put_memory_item,
+    reflect_profile_memory,
     search_memory_items,
 )
 from app.schemas.chat import ChatRequest
@@ -173,11 +173,7 @@ def test_profile_reflection_writes_memory_from_tool_call(monkeypatch) -> None:
         created = await reflect_profile_memory(
             store=store,
             user_id="teacher-1",
-            state={
-                "messages": [
-                    HumanMessage(content="Please remember I prefer concise answers.")
-                ]
-            },
+            state={"messages": [HumanMessage(content="Please remember I prefer concise answers.")]},
         )
         assert created is not None
         assert created["title"] == "Answer style"

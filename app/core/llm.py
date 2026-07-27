@@ -80,6 +80,7 @@ def get_small_model(*, streaming: bool = False) -> ChatOpenAI:
         **_stream_usage_kwargs(streaming),
     )
 
+
 def get_memory_model(*, streaming: bool = False) -> ChatOpenAI:
     return ChatOpenAI(
         model=_first_non_empty_env(

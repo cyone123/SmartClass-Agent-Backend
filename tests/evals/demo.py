@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """快速演示评估系统的使用"""
-import asyncio
+
 import sys
 from pathlib import Path
 
@@ -46,7 +46,7 @@ def demo():
         "intent_teaching_plan_001    - 教学规划意图识别",
         "intent_artifact_revision_001 - 产物修改意图识别",
         "intent_ambiguous_001        - 模糊请求处理",
-        "intent_mixed_001            - 混合意图识别"
+        "intent_mixed_001            - 混合意图识别",
     ]
     for case in cases:
         print(f"  • {case}")
@@ -56,7 +56,7 @@ def demo():
         "route_match      - 路由匹配检查",
         "contains         - 包含检查",
         "not_contains     - 不包含检查",
-        "response_quality - LLM评判响应质量"
+        "response_quality - LLM评判响应质量",
     ]
     for assertion in assertions:
         print(f"  • {assertion}")

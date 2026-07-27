@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -33,7 +33,10 @@ def test_local_storage_backend_put_read_materialize_and_delete(tmp_path: Path) -
     assert stored.storage_path is not None
     assert Path(stored.storage_path).read_bytes() == b"pdf-bytes"
     assert service.exists(storage_backend=stored.backend, storage_key=stored.key, storage_path=stored.storage_path)
-    assert service.read_bytes(storage_backend=stored.backend, storage_key=stored.key, storage_path=stored.storage_path) == b"pdf-bytes"
+    assert (
+        service.read_bytes(storage_backend=stored.backend, storage_key=stored.key, storage_path=stored.storage_path)
+        == b"pdf-bytes"
+    )
 
     with service.materialize_temp_file(
         storage_backend=stored.backend,
@@ -149,5 +152,13 @@ def test_storage_service_accepts_minio_like_backend(tmp_path: Path) -> None:
 
     assert stored.backend == MINIO_STORAGE_BACKEND
     assert service.exists(storage_backend=MINIO_STORAGE_BACKEND, storage_key=key, storage_path=stored.storage_path)
-    assert service.read_bytes(storage_backend=MINIO_STORAGE_BACKEND, storage_key=key, storage_path=stored.storage_path) == b"<html></html>"
-    assert service.presigned_get_url(storage_backend=MINIO_STORAGE_BACKEND, storage_key=key, storage_path=stored.storage_path) == f"https://minio.example.test/{key}"
+    assert (
+        service.read_bytes(storage_backend=MINIO_STORAGE_BACKEND, storage_key=key, storage_path=stored.storage_path)
+        == b"<html></html>"
+    )
+    assert (
+        service.presigned_get_url(
+            storage_backend=MINIO_STORAGE_BACKEND, storage_key=key, storage_path=stored.storage_path
+        )
+        == f"https://minio.example.test/{key}"
+    )

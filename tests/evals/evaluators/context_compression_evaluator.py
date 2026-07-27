@@ -1,4 +1,5 @@
 """Context compression evaluator."""
+
 from __future__ import annotations
 
 import time
@@ -34,12 +35,7 @@ class FakeCompressionModel:
         if self.fail:
             raise RuntimeError("eval compression failure")
         prompt = "\n\n".join(message_to_text(message) for message in messages)
-        return AIMessage(
-            content=(
-                "对话目标：完成 SmartClass 长对话上下文压缩。\n"
-                f"保留要点：{prompt[:800]}"
-            )
-        )
+        return AIMessage(content=(f"对话目标：完成 SmartClass 长对话上下文压缩。\n保留要点：{prompt[:800]}"))
 
 
 class ContextCompressionEvaluator(BaseEvaluator):
@@ -121,9 +117,7 @@ class ContextCompressionEvaluator(BaseEvaluator):
             model=FakeCompressionModel(fail=bool(context.get("simulate_failure"))),
         )
         compressed_messages = [
-            message
-            for message in (result.update or {}).get("messages", [])
-            if is_compressed_context_message(message)
+            message for message in (result.update or {}).get("messages", []) if is_compressed_context_message(message)
         ]
         compressed_context = message_to_text(compressed_messages[0]) if compressed_messages else ""
         return {

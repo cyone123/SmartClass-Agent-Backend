@@ -5,15 +5,13 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from app.core.agent import (
     SUGGESTION_COUNT,
     _build_suggestion_conversation,
-    _split_suggestion_lines,
     _sanitize_suggestions,
+    _split_suggestion_lines,
 )
 
 
 def test_split_suggestion_lines_uses_newlines() -> None:
-    suggestions = _split_suggestion_lines(
-        "第一条建议\n\n第二条建议\r\n第三条建议\n第四条建议"
-    )
+    suggestions = _split_suggestion_lines("第一条建议\n\n第二条建议\r\n第三条建议\n第四条建议")
 
     assert suggestions == [
         "第一条建议",

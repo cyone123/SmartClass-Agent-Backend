@@ -142,11 +142,7 @@ def build_compression_plan(
     model: Any | None = None,
 ) -> CompressionPlan:
     settings = settings or CompressionSettings()
-    messages = tuple(
-        message
-        for message in state.get("messages", []) or []
-        if isinstance(message, BaseMessage)
-    )
+    messages = tuple(message for message in state.get("messages", []) or [] if isinstance(message, BaseMessage))
     estimated_tokens = estimate_message_tokens(messages, model=model)
     if not settings.enabled:
         return CompressionPlan(False, "disabled", estimated_tokens, len(messages))
@@ -408,11 +404,7 @@ async def compress_state_messages(
         )
         summary = message_to_text(response) if isinstance(response, BaseMessage) else str(response)
         compressed_message = build_compressed_message(state, summary, settings=settings)
-        all_messages = tuple(
-            message
-            for message in state.get("messages", []) or []
-            if isinstance(message, BaseMessage)
-        )
+        all_messages = tuple(message for message in state.get("messages", []) or [] if isinstance(message, BaseMessage))
         update = build_replacement_update(all_messages, compressed_message, plan.retained_messages)
         after_messages = (compressed_message, *plan.retained_messages)
         estimated_after = estimate_message_tokens(after_messages, model=model)

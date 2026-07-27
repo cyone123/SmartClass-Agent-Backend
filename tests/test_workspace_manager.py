@@ -11,8 +11,8 @@ from app.core.workspace import (
     DaytonaExecutionBackend,
     DaytonaExecutionSettings,
     LocalSubprocessExecutionBackend,
-    WorkspaceManager,
     WorkspaceExecutionError,
+    WorkspaceManager,
     WorkspaceValidationError,
     _decode_process_output,
 )
@@ -100,9 +100,7 @@ class _FakeProcess:
             return _FakeProcessResponse()
         if command.startswith("find "):
             output_dir = command.split(" ", 2)[1].strip("'\"")
-            files = sorted(
-                path for path in self.sandbox.fs.files if path.startswith(output_dir.rstrip("/") + "/")
-            )
+            files = sorted(path for path in self.sandbox.fs.files if path.startswith(output_dir.rstrip("/") + "/"))
             return _FakeProcessResponse(result="\n".join(files))
         if self.scenario == "timeout":
             raise TimeoutError("timed out")
@@ -209,8 +207,7 @@ def test_daytona_backend_uploads_executes_downloads_and_cleans_up(
         _config(),
         relative_path="generate.py",
         content=(
-            "import os\n"
-            "open(os.path.join(os.environ['AGENT_OUTPUT_DIR'], 'result.txt'), 'w').write('artifact')\n"
+            "import os\nopen(os.path.join(os.environ['AGENT_OUTPUT_DIR'], 'result.txt'), 'w').write('artifact')\n"
         ),
     )
 

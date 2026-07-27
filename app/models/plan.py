@@ -8,11 +8,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
-    from app.models.file import AttachmentFile
-    from app.models.file import ArtifactFile
-    from app.models.file import KnowledgeFile
+    from app.models.file import ArtifactFile, AttachmentFile, KnowledgeFile
     from app.models.session import Session
     from app.models.user import User
+
 
 class Plan(Base):
     __tablename__ = "teaching_plans"

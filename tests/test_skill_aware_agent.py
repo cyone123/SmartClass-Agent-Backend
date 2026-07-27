@@ -34,9 +34,7 @@ def _write_skill(
     skill_dir.mkdir(parents=True, exist_ok=True)
     allowed_tools_block = ""
     if allowed_tools:
-        allowed_tools_block = "allowed-tools:\n" + "".join(
-            f"  - {tool_name}\n" for tool_name in allowed_tools
-        )
+        allowed_tools_block = "allowed-tools:\n" + "".join(f"  - {tool_name}\n" for tool_name in allowed_tools)
     (skill_dir / "SKILL.md").write_text(
         (
             "---\n"
@@ -151,10 +149,7 @@ def test_agent_can_load_skill_write_and_run_workspace_code(
     assert output_file.read_text(encoding="utf-8") == "hello from workspace"
 
     progress_steps = [
-        step["step_key"]
-        for event in events
-        if event["event"] == "progress"
-        for step in event["data"]["steps"]
+        step["step_key"] for event in events if event["event"] == "progress" for step in event["data"]["steps"]
     ]
     assert "skill_activation" in progress_steps
     assert "code_preparation" in progress_steps

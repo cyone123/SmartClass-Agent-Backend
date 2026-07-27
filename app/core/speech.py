@@ -87,7 +87,7 @@ class OpenAICompatibleSpeechRuntime:
                     response_format="verbose_json",
                 )
                 print(f"语音转文本success: {str(response)}")
-        except Exception as exc:  
+        except Exception as exc:
             message = str(exc).strip() or exc.__class__.__name__
             print(f"语音转文本error: {message}")
             lowered = message.lower()

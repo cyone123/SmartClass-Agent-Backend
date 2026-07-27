@@ -1,14 +1,16 @@
 """MemoryEvaluator 单元测试"""
+
 from __future__ import annotations
 
 import pytest
+from backend.tests.evals.evaluators.memory_evaluator import MemoryEvaluator
+
 from app.core.evaluation import (
     AssertionType,
     EvalAssertion,
     EvalCase,
     EvalCaseStatus,
 )
-from backend.tests.evals.evaluators.memory_evaluator import MemoryEvaluator
 
 
 class TestMemoryEvaluator:
@@ -177,22 +179,16 @@ class TestMemoryEvaluator:
     async def test_privacy_exposure_calculation(self, evaluator):
         """测试隐私暴露度计算"""
         # 不含敏感信息
-        exposure1 = evaluator._calculate_privacy_exposure(
-            "用户喜欢使用思维导图", "教学经验丰富"
-        )
+        exposure1 = evaluator._calculate_privacy_exposure("用户喜欢使用思维导图", "教学经验丰富")
         assert exposure1 == 0.0
 
         # 包含一个敏感信息
-        exposure2 = evaluator._calculate_privacy_exposure(
-            "用户电话：13800138000", "教学经验丰富"
-        )
+        exposure2 = evaluator._calculate_privacy_exposure("用户电话：13800138000", "教学经验丰富")
         assert exposure2 > 0.0
         assert exposure2 < 1.0
 
         # 包含多个敏感信息
-        exposure3 = evaluator._calculate_privacy_exposure(
-            "电话：13800138000，邮箱：test@example.com", "地址：北京市"
-        )
+        exposure3 = evaluator._calculate_privacy_exposure("电话：13800138000，邮箱：test@example.com", "地址：北京市")
         assert exposure3 > exposure2
 
     @pytest.mark.asyncio

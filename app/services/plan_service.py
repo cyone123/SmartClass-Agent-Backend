@@ -5,15 +5,12 @@ from sqlalchemy.orm import selectinload
 from app.models.plan import Plan
 from app.models.session import Session
 
+
 async def get_plan(db, *, user_id: int):
-    query = (
-        select(Plan)
-        .options(selectinload(Plan.sessions))
-        .where(Plan.user_id == user_id)
-        .order_by(Plan.id.asc())
-    )
+    query = select(Plan).options(selectinload(Plan.sessions)).where(Plan.user_id == user_id).order_by(Plan.id.asc())
     result = await db.execute(query)
     return result.scalars().all()
+
 
 async def create_plan(db, name, *, user_id: int):
     new_plan = Plan(name=name, user_id=user_id)
@@ -21,6 +18,7 @@ async def create_plan(db, name, *, user_id: int):
     await db.commit()
     await db.refresh(new_plan)
     return new_plan
+
 
 async def ensure_owned_plan(db, plan_id: int, *, user_id: int) -> Plan:
     stmt = select(Plan).where(Plan.id == plan_id, Plan.user_id == user_id)
@@ -33,6 +31,7 @@ async def ensure_owned_plan(db, plan_id: int, *, user_id: int) -> Plan:
         )
     return plan
 
+
 async def delete_plan_by_id(db, plan_id, *, user_id: int):
     await ensure_owned_plan(db, plan_id, user_id=user_id)
     stmt = delete(Plan).where(Plan.id == plan_id, Plan.user_id == user_id)
@@ -42,9 +41,10 @@ async def delete_plan_by_id(db, plan_id, *, user_id: int):
         await db.execute(stmt)
     return
 
+
 async def update_plan_by_id(db, plan, *, user_id: int):
     await ensure_owned_plan(db, plan.id, user_id=user_id)
     stmt = update(Plan).where(Plan.id == plan.id, Plan.user_id == user_id).values(name=plan.name)
     await db.execute(stmt)
     await db.commit()
-    return 
+    return

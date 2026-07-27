@@ -1,15 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import mimetypes
 import re
-import contextlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
 
-from app.core.progress import ProgressReporter
-from app.core.storage import build_storage_key, get_storage_service
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +19,9 @@ from app.config import (
     get_file_storage_root,
     get_file_upload_max_size_bytes,
 )
+from app.core.progress import ProgressReporter
 from app.core.rag import RagRuntime
+from app.core.storage import build_storage_key, get_storage_service
 from app.models.file import AttachmentFile, KnowledgeFile
 from app.models.plan import Plan
 from app.models.session import Session
@@ -53,7 +53,7 @@ def _guess_mime_type(filename: str, fallback: str | None) -> str:
 
 def _build_storage_path(plan_id: int, file_id: int, original_name: str) -> tuple[str, Path]:
     # safe_name = _sanitize_filename(original_name)
-    stored_name = original_name #f"{file_id}.{safe_name}"
+    stored_name = original_name  # f"{file_id}.{safe_name}"
     storage_path = get_file_storage_root() / "plan_files" / str(plan_id) / stored_name
     return stored_name, storage_path
 
@@ -81,10 +81,8 @@ def _build_attachment_storage_path(
     original_name: str,
 ) -> tuple[str, Path]:
     # safe_name = _sanitize_filename(original_name)
-    stored_name = original_name #f"{attachment_id}.{safe_name}"
-    storage_path = (
-        get_file_storage_root() / "attachments" / thread_id / stored_name
-    )
+    stored_name = original_name  # f"{attachment_id}.{safe_name}"
+    storage_path = get_file_storage_root() / "attachments" / thread_id / stored_name
     return stored_name, storage_path
 
 
@@ -305,11 +303,9 @@ async def create_file_from_upload(
     user_id: int,
 ) -> KnowledgeFile:
     await ensure_plan_exists(db, plan_id, user_id=user_id)
-    original_name, extension, content, size_bytes, sha256, mime_type = (
-        await _read_and_validate_upload_file(
-            upload_file,
-            allowed_extensions=get_allowed_knowledge_upload_extensions(),
-        )
+    original_name, extension, content, size_bytes, sha256, mime_type = await _read_and_validate_upload_file(
+        upload_file,
+        allowed_extensions=get_allowed_knowledge_upload_extensions(),
     )
 
     existing = await get_existing_file_by_hash(db, plan_id=plan_id, sha256=sha256, user_id=user_id)
@@ -369,11 +365,9 @@ async def create_attachment_from_upload(
 ) -> AttachmentFile:
     await ensure_plan_exists(db, plan_id, user_id=user_id)
     await ensure_thread_belongs_to_plan(db, plan_id, thread_id, user_id=user_id)
-    original_name, extension, content, size_bytes, sha256, mime_type = (
-        await _read_and_validate_upload_file(
-            upload_file,
-            allowed_extensions=get_allowed_attachment_upload_extensions(),
-        )
+    original_name, extension, content, size_bytes, sha256, mime_type = await _read_and_validate_upload_file(
+        upload_file,
+        allowed_extensions=get_allowed_attachment_upload_extensions(),
     )
 
     existing = await get_existing_attachment_by_hash(
@@ -443,11 +437,9 @@ async def create_voice_attachment_from_upload(
 ) -> AttachmentFile:
     await ensure_plan_exists(db, plan_id, user_id=user_id)
     await ensure_thread_belongs_to_plan(db, plan_id, thread_id, user_id=user_id)
-    original_name, extension, content, size_bytes, sha256, mime_type = (
-        await _read_and_validate_upload_file(
-            upload_file,
-            allowed_extensions=get_allowed_voice_upload_extensions(),
-        )
+    original_name, extension, content, size_bytes, sha256, mime_type = await _read_and_validate_upload_file(
+        upload_file,
+        allowed_extensions=get_allowed_voice_upload_extensions(),
     )
 
     existing = await get_existing_attachment_by_hash(
@@ -535,10 +527,7 @@ async def get_attachments_by_ids(
         missing_id = missing_ids[0]
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                f"Attachment {missing_id} not found for plan {plan_id} "
-                f"and thread {thread_id}."
-            ),
+            detail=(f"Attachment {missing_id} not found for plan {plan_id} and thread {thread_id}."),
         )
 
     return [attachment_by_id[attachment_id] for attachment_id in attachment_ids]
@@ -585,8 +574,7 @@ async def get_chat_attachments_by_ids(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    f"Attachment {attachment.id} is a voice attachment and cannot be "
-                    "used for chat attachment analysis."
+                    f"Attachment {attachment.id} is a voice attachment and cannot be used for chat attachment analysis."
                 ),
             )
         if not get_storage_service().exists(
@@ -616,10 +604,7 @@ def materialize_attachment_file(attachment: AttachmentFile) -> Iterator[Path]:
 def materialize_attachment_files(attachments: list[AttachmentFile]) -> Iterator[list[Path]]:
     stack = contextlib.ExitStack()
     try:
-        paths = [
-            stack.enter_context(materialize_attachment_file(attachment))
-            for attachment in attachments
-        ]
+        paths = [stack.enter_context(materialize_attachment_file(attachment)) for attachment in attachments]
         yield paths
     finally:
         stack.close()

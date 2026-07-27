@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-import os
 import re
 import shutil
 import time
@@ -49,6 +48,7 @@ from app.core.graph import (
     get_pending_approval_payload,
 )
 from app.core.llm import get_model, get_small_model
+from app.core.memory import DEFAULT_USER_ID
 from app.core.observability import (
     ObservationSink,
     RunContext,
@@ -56,12 +56,10 @@ from app.core.observability import (
     extract_token_usage,
     get_observation_sink,
     log_observation,
-    observe_llm_call,
     observation_sink_from_config,
+    observe_llm_call,
     record_metric,
     run_context_from_config,
-    sanitize_observation_fields,
-    trace_span,
 )
 from app.core.progress import (
     ProgressReporter,
@@ -74,7 +72,6 @@ from app.core.skills import SkillRegistry, SkillToolset, create_skill_registry
 from app.core.state import SubAgentResult, TeachingAssistantState
 from app.core.video_transcribe import VideoTranscriptionRuntime
 from app.core.workspace import WorkspaceToolset, get_workspace_paths
-from app.core.memory import DEFAULT_USER_ID
 from app.dependencies.db import (
     AsyncSessionLocal,
     close_agent_checkpointer,
@@ -105,9 +102,7 @@ WORKSPACE_TOOL_NAMES = {
     "replace_workspace_text",
     "run_workspace_code",
 }
-BLOCKED_SHELL_PATTERN = re.compile(
-    r"(?i)(^|\s)(python|python3|py|node|npm|npx|pip|pip3|pnpm|yarn|uv)\b"
-)
+BLOCKED_SHELL_PATTERN = re.compile(r"(?i)(^|\s)(python|python3|py|node|npm|npx|pip|pip3|pnpm|yarn|uv)\b")
 ARTIFACT_STEP_KEYS: dict[ArtifactType, str] = {
     "ppt": "ppt_generation",
     "docx": "lesson_plan_generation",
@@ -312,11 +307,7 @@ def _split_suggestion_lines(value: str) -> list[str]:
     if not value:
         return []
 
-    raw_lines = [
-        line.strip()
-        for line in re.split(r"\r?\n+", value)
-        if line.strip()
-    ]
+    raw_lines = [line.strip() for line in re.split(r"\r?\n+", value) if line.strip()]
     return raw_lines[: max(SUGGESTION_COUNT * 2, SUGGESTION_COUNT)]
 
 
@@ -407,10 +398,7 @@ class SkillPromptMiddleware(AgentMiddleware):
     """Inject skill metadata into the agent system prompt."""
 
     def __init__(self, registry: SkillRegistry) -> None:
-        skill_lines = [
-            f"- **{skill.name}**: {skill.description}"
-            for skill in registry.list_metadata()
-        ]
+        skill_lines = [f"- **{skill.name}**: {skill.description}" for skill in registry.list_metadata()]
         self.skills_prompt = "\n".join(skill_lines)
 
     def _inject_skill_catalog(self, request: ModelRequest) -> ModelRequest:
@@ -430,9 +418,7 @@ class SkillPromptMiddleware(AgentMiddleware):
         if request.system_message is None:
             new_system_message = SystemMessage(content=skills_addendum.strip())
         else:
-            new_content = list(request.system_message.content_blocks) + [
-                {"type": "text", "text": skills_addendum}
-            ]
+            new_content = list(request.system_message.content_blocks) + [{"type": "text", "text": skills_addendum}]
             new_system_message = SystemMessage(content=new_content)
         return request.override(system_message=new_system_message)
 
@@ -471,9 +457,7 @@ class SkillExecutionPolicyMiddleware(AgentMiddleware[SkillAwareAgentState, Any, 
     ) -> list[str]:
         active_skill_names = self._get_active_skill_names(state)
         return [
-            skill_name
-            for skill_name in active_skill_names
-            if self.registry.skill_allows_tool(skill_name, tool_name)
+            skill_name for skill_name in active_skill_names if self.registry.skill_allows_tool(skill_name, tool_name)
         ]
 
     def _build_active_skill_section(self, active_skill_names: list[str]) -> str:
@@ -485,13 +469,9 @@ class SkillExecutionPolicyMiddleware(AgentMiddleware[SkillAwareAgentState, Any, 
             skill = self.registry.get_skill(skill_name)
             allowed_tools = ", ".join(skill.allowed_tools) if skill.allowed_tools else "none"
             compatibility = skill.compatibility or "none"
-            lines.append(
-                f"- **{skill.name}**: allowed tools = {allowed_tools}; "
-                f"compatibility = {compatibility}"
-            )
+            lines.append(f"- **{skill.name}**: allowed tools = {allowed_tools}; compatibility = {compatibility}")
         lines.append(
-            "If you need temporary code, use workspace tools instead of `shell`. "
-            "Do not install dependencies yourself."
+            "If you need temporary code, use workspace tools instead of `shell`. Do not install dependencies yourself."
         )
         return "\n".join(lines)
 
@@ -522,8 +502,7 @@ class SkillExecutionPolicyMiddleware(AgentMiddleware[SkillAwareAgentState, Any, 
             system_message = SystemMessage(content=active_skill_section.strip())
         else:
             system_message = SystemMessage(
-                content=list(request.system_message.content_blocks)
-                + [{"type": "text", "text": active_skill_section}]
+                content=list(request.system_message.content_blocks) + [{"type": "text", "text": active_skill_section}]
             )
         return request.override(system_message=system_message)
 
@@ -638,7 +617,8 @@ class LLMObservationMiddleware(AgentMiddleware):
             sink = _get_observation_sink(config)
             request_messages = self._request_messages(request)
             ai_messages = [
-                message for message in (response.result if response is not None else [])
+                message
+                for message in (response.result if response is not None else [])
                 if isinstance(message, AIMessage)
             ]
             final_ai_message = ai_messages[-1] if ai_messages else None
@@ -943,9 +923,7 @@ class AgentRuntime:
         observation_sink: ObservationSink | None = None,
         progress_reporter: ProgressReporter | None = None,
     ) -> str:
-        context = (run_context or RunContext(run_id=run_id or thread_id or "adhoc")).with_agent(
-            "attachment_agent"
-        )
+        context = (run_context or RunContext(run_id=run_id or thread_id or "adhoc")).with_agent("attachment_agent")
         sink = observation_sink or get_observation_sink()
         if progress_reporter:
             progress_reporter.emit("attachment_analysis", "running")
@@ -965,8 +943,7 @@ class AgentRuntime:
             "Load the proper skills based on the file types and follow them. "
             "Use bundled scripts or resources when needed, then return a concise useful summary.\n\n"
             f"User message: {message}\n"
-            "Attachment file paths:\n"
-            + "\n".join(f"- {Path(file_path)}" for file_path in file_paths)
+            "Attachment file paths:\n" + "\n".join(f"- {Path(file_path)}" for file_path in file_paths)
         )
         final_msg_content = ""
 
@@ -1300,8 +1277,7 @@ class AgentRuntime:
             "context_compression",
             "success",
             detail=(
-                "已完成上下文压缩"
-                f"（约 {result.estimated_tokens_before} -> {result.estimated_tokens_after} tokens）"
+                f"已完成上下文压缩（约 {result.estimated_tokens_before} -> {result.estimated_tokens_after} tokens）"
             ),
         )
 
@@ -1332,17 +1308,11 @@ class AgentRuntime:
                     "不要编号，不要解释，只返回 3 行纯文本。"
                 )
             ),
-            HumanMessage(
-                content=(
-                    "请根据下面的对话生成 3 条继续追问：\n\n"
-                    + "\n".join(conversation_lines)
-                )
-            ),
+            HumanMessage(content=("请根据下面的对话生成 3 条继续追问：\n\n" + "\n".join(conversation_lines))),
         ]
 
         context = (
-            run_context
-            or RunContext(run_id="suggestions", thread_id=thread_id, agent_name="suggestions")
+            run_context or RunContext(run_id="suggestions", thread_id=thread_id, agent_name="suggestions")
         ).with_agent("suggestions")
         sink = observation_sink or get_observation_sink()
         try:
@@ -1369,9 +1339,7 @@ class AgentRuntime:
             )
             return []
 
-        suggestions = _sanitize_suggestions(
-            _split_suggestion_lines(_message_to_text(result).strip())
-        )
+        suggestions = _sanitize_suggestions(_split_suggestion_lines(_message_to_text(result).strip()))
         if len(suggestions) < SUGGESTION_COUNT:
             log_observation(
                 "suggestions.generation.discarded",
@@ -1418,9 +1386,7 @@ class AgentRuntime:
 
                 raw_messages = data.get("messages") or []
                 if step == "model":
-                    model_messages = [
-                        message for message in raw_messages if isinstance(message, AIMessage)
-                    ]
+                    model_messages = [message for message in raw_messages if isinstance(message, AIMessage)]
                     if not model_messages:
                         continue
 
@@ -1441,9 +1407,7 @@ class AgentRuntime:
                         )
 
                 if step == "tools":
-                    tool_messages = [
-                        message for message in raw_messages if isinstance(message, ToolMessage)
-                    ]
+                    tool_messages = [message for message in raw_messages if isinstance(message, ToolMessage)]
                     for tool_message in tool_messages:
                         emit_trace_entry(
                             "tool_result",
@@ -1614,9 +1578,7 @@ class AgentRuntime:
 
         if not candidates:
             candidates = [
-                Path(raw_path)
-                for raw_path in after_snapshot
-                if Path(raw_path).is_relative_to(paths.output_root)
+                Path(raw_path) for raw_path in after_snapshot if Path(raw_path).is_relative_to(paths.output_root)
             ]
         if not candidates:
             return None
@@ -1881,11 +1843,7 @@ class AgentRuntime:
             emit_trace_entry(
                 "status",
                 f"开始{'生成' if mode == 'create' else '修改'}{artifact_title}",
-                content=(
-                    "正在准备工作区并启动产物 agent。"
-                    if mode == "revise"
-                    else "正在启动产物 agent。"
-                ),
+                content=("正在准备工作区并启动产物 agent。" if mode == "revise" else "正在启动产物 agent。"),
                 status="running",
             )
 
@@ -1908,7 +1866,9 @@ class AgentRuntime:
                     agent_config=agent_config,
                 )
                 if isinstance(main_reporter, ProgressReporter):
-                    main_reporter.emit("artifact_revision_prepare", "success", detail=f"{artifact_title}修改工作区已就绪")
+                    main_reporter.emit(
+                        "artifact_revision_prepare", "success", detail=f"{artifact_title}修改工作区已就绪"
+                    )
             else:
                 self._clear_workspace_for_job(agent_config)
             output_snapshot_before = self._snapshot_generated_outputs(
@@ -1969,7 +1929,7 @@ class AgentRuntime:
                                 "artifact": _artifact_payload(refreshed_record),
                             },
                         }
-                )
+                    )
 
             if isinstance(main_reporter, ProgressReporter):
                 detail = f"{artifact_title}已生成" if mode == "create" else f"{artifact_title}已更新"

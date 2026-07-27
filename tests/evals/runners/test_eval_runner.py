@@ -1,14 +1,14 @@
 """评估运行器集成测试"""
-import pytest
-from pathlib import Path
 
-from tests.evals.runners import EvalRunner
+import pytest
+
 from tests.evals.evaluators import (
+    BaseEvaluator,
+    ExtractionEvaluator,
     IntentEvaluator,
     MemoryEvaluator,
-    ExtractionEvaluator,
-    BaseEvaluator,
 )
+from tests.evals.runners import EvalRunner
 
 
 class TestEvalRunner:
@@ -35,38 +35,34 @@ class TestEvalRunner:
 
         actual_categories = set(eval_runner.evaluators.keys())
 
-        assert (
-            actual_categories == expected_categories
-        ), f"Expected {expected_categories}, got {actual_categories}"
+        assert actual_categories == expected_categories, f"Expected {expected_categories}, got {actual_categories}"
 
     def test_eval_runner_evaluators_are_correct_types(self, eval_runner):
         """验证评估器类型正确"""
         # intent_recognition should be IntentEvaluator
-        assert isinstance(
-            eval_runner.evaluators["intent_recognition"], IntentEvaluator
-        ), "intent_recognition should be IntentEvaluator"
+        assert isinstance(eval_runner.evaluators["intent_recognition"], IntentEvaluator), (
+            "intent_recognition should be IntentEvaluator"
+        )
 
         # memory_* should all be MemoryEvaluator
-        assert isinstance(
-            eval_runner.evaluators["memory_retrieval"], MemoryEvaluator
-        ), "memory_retrieval should be MemoryEvaluator"
-        assert isinstance(
-            eval_runner.evaluators["memory_write"], MemoryEvaluator
-        ), "memory_write should be MemoryEvaluator"
-        assert isinstance(
-            eval_runner.evaluators["memory_update"], MemoryEvaluator
-        ), "memory_update should be MemoryEvaluator"
+        assert isinstance(eval_runner.evaluators["memory_retrieval"], MemoryEvaluator), (
+            "memory_retrieval should be MemoryEvaluator"
+        )
+        assert isinstance(eval_runner.evaluators["memory_write"], MemoryEvaluator), (
+            "memory_write should be MemoryEvaluator"
+        )
+        assert isinstance(eval_runner.evaluators["memory_update"], MemoryEvaluator), (
+            "memory_update should be MemoryEvaluator"
+        )
 
         # extraction_quality should be ExtractionEvaluator
-        assert isinstance(
-            eval_runner.evaluators["extraction_quality"], ExtractionEvaluator
-        ), "extraction_quality should be ExtractionEvaluator"
+        assert isinstance(eval_runner.evaluators["extraction_quality"], ExtractionEvaluator), (
+            "extraction_quality should be ExtractionEvaluator"
+        )
 
         # All should be BaseEvaluator
         for category, evaluator in eval_runner.evaluators.items():
-            assert isinstance(
-                evaluator, BaseEvaluator
-            ), f"{category} evaluator should be instance of BaseEvaluator"
+            assert isinstance(evaluator, BaseEvaluator), f"{category} evaluator should be instance of BaseEvaluator"
 
     def test_eval_runner_loads_cases_by_category(self, eval_runner, tmp_path):
         """验证可以按类别加载用例"""
@@ -149,9 +145,7 @@ metadata:
         # Write test files
         (intent_dir / "intent_001.yaml").write_text(intent_case, encoding="utf-8")
         (memory_dir / "memory_001.yaml").write_text(memory_case, encoding="utf-8")
-        (extraction_dir / "extraction_001.yaml").write_text(
-            extraction_case, encoding="utf-8"
-        )
+        (extraction_dir / "extraction_001.yaml").write_text(extraction_case, encoding="utf-8")
 
         # Test loading by category
         intent_cases = eval_runner.load_cases(category="intent_recognition")

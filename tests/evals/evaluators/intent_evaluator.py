@@ -1,4 +1,5 @@
 """意图识别评估器"""
+
 from __future__ import annotations
 
 import time
@@ -29,9 +30,7 @@ class IntentEvaluator(BaseEvaluator):
             rag_runtime = await create_rag_runtime()
             skill_registry = create_skill_registry()
             speech_runtime = create_speech_runtime()
-            video_runtime = create_video_transcription_runtime(
-                speech_runtime=speech_runtime
-            )
+            video_runtime = create_video_transcription_runtime(speech_runtime=speech_runtime)
 
             self._runtime = await create_agent_runtime(
                 rag_runtime=rag_runtime,
@@ -79,11 +78,7 @@ class IntentEvaluator(BaseEvaluator):
             actual_output = {
                 "intent": result.get("intent"),
                 "extracted_elements": result.get("teaching_metadata"),
-                "response": (
-                    result.get("messages", [])[-1].content
-                    if result.get("messages")
-                    else ""
-                ),
+                "response": (result.get("messages", [])[-1].content if result.get("messages") else ""),
                 "rag_triggered": "rag_context" in result,
                 "memory_operations": [],
             }
@@ -97,18 +92,12 @@ class IntentEvaluator(BaseEvaluator):
             # 计算加权分数
             total_weight = sum(a.weight for a in case.assertions)
             weighted_score = (
-                sum(r["score"] * r["weight"] for r in assertion_results) / total_weight
-                if total_weight > 0
-                else 0.0
+                sum(r["score"] * r["weight"] for r in assertion_results) / total_weight if total_weight > 0 else 0.0
             )
 
             # 判断是否通过（所有权重 >= 0.5 的断言必须通过）
-            all_critical_passed = all(
-                r["passed"] for r in assertion_results if r["weight"] >= 0.5
-            )
-            status = (
-                EvalCaseStatus.PASSED if all_critical_passed else EvalCaseStatus.FAILED
-            )
+            all_critical_passed = all(r["passed"] for r in assertion_results if r["weight"] >= 0.5)
+            status = EvalCaseStatus.PASSED if all_critical_passed else EvalCaseStatus.FAILED
 
             return EvalResult(
                 case_id=case.case_id,

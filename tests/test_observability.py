@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,14 +9,13 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from langchain.agents.middleware import ModelResponse
-from langchain_core.messages import AIMessage
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
 from app.api.chat import router as chat_router
 from app.core.agent import LLMObservationMiddleware, get_agent_runtime
-from app.core.llm import get_model
 from app.core.auth import get_current_user
+from app.core.llm import get_model
 from app.core.observability import (
     JsonlTraceSink,
     ObservationEvent,

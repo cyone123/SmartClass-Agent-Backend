@@ -147,10 +147,7 @@ class VideoTranscriptionRuntime:
                     if progress_reporter is not None:
                         progress_reporter.emit(VIDEO_TRANSCRIPTION_STEP, "failed", detail=audio_error)
                 else:
-                    print(
-                        f"[video] transcription success filename={filename} "
-                        f"text_len={len(transcript_text or '')}"
-                    )
+                    print(f"[video] transcription success filename={filename} text_len={len(transcript_text or '')}")
                     if progress_reporter is not None:
                         progress_reporter.emit(
                             VIDEO_TRANSCRIPTION_STEP,
@@ -179,9 +176,7 @@ class VideoTranscriptionRuntime:
                 keyframe_count = len(frame_paths)
                 print(f"[video] extract_keyframes success filename={filename} keyframe_count={keyframe_count}")
                 detail = (
-                    f"已抽取 {len(frame_paths)} 张关键帧：{filename}"
-                    if frame_paths
-                    else f"未抽取到关键帧：{filename}"
+                    f"已抽取 {len(frame_paths)} 张关键帧：{filename}" if frame_paths else f"未抽取到关键帧：{filename}"
                 )
                 if progress_reporter is not None:
                     progress_reporter.emit(VIDEO_KEYFRAME_EXTRACTION_STEP, "success", detail=detail)
@@ -202,10 +197,7 @@ class VideoTranscriptionRuntime:
                     if progress_reporter is not None:
                         progress_reporter.emit(VIDEO_FRAME_CAPTIONING_STEP, "failed", detail=frame_error)
                 else:
-                    print(
-                        f"[video] caption_keyframes success filename={filename} "
-                        f"text_len={len(frame_summary or '')}"
-                    )
+                    print(f"[video] caption_keyframes success filename={filename} text_len={len(frame_summary or '')}")
                     if progress_reporter is not None:
                         progress_reporter.emit(
                             VIDEO_FRAME_CAPTIONING_STEP,

@@ -1,12 +1,10 @@
 """ExtractionEvaluator 单元测试"""
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.core.evaluation import (
-    EvalAssertion,
-    EvalCase,
     AssertionType,
-    EvalCaseStatus,
+    EvalAssertion,
 )
 from tests.evals.evaluators.extraction_evaluator import ExtractionEvaluator
 
@@ -129,9 +127,7 @@ class TestCheckExtractionQuality:
             min_score=0.7,
         )
 
-        actual = {
-            "teaching_metadata": {}
-        }
+        actual = {"teaching_metadata": {}}
 
         # 执行检查
         result = evaluator._check_extraction_quality(assertion, actual)

@@ -1,10 +1,12 @@
 """评估器基类"""
+
 from __future__ import annotations
 
-import yaml
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Optional
+
+import yaml
 
 from app.core.evaluation import EvalAssertion, EvalCase, EvalResult
 from app.core.llm import llm
@@ -26,9 +28,7 @@ class BaseEvaluator(ABC):
         with open(path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f)
 
-    async def _check_assertion(
-        self, assertion: EvalAssertion, actual: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _check_assertion(self, assertion: EvalAssertion, actual: dict[str, Any]) -> dict[str, Any]:
         """检查单个断言"""
         if assertion.type == "route_match":
             return self._check_route_match(assertion, actual)
@@ -47,9 +47,7 @@ class BaseEvaluator(ABC):
                 "error": f"Unknown assertion type: {assertion.type}",
             }
 
-    def _check_route_match(
-        self, assertion: EvalAssertion, actual: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _check_route_match(self, assertion: EvalAssertion, actual: dict[str, Any]) -> dict[str, Any]:
         """检查路由匹配"""
         field_value = self._get_nested_field(actual, assertion.field)
         passed = field_value == assertion.expected
@@ -63,16 +61,10 @@ class BaseEvaluator(ABC):
             "weight": assertion.weight,
         }
 
-    def _check_contains(
-        self, assertion: EvalAssertion, actual: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _check_contains(self, assertion: EvalAssertion, actual: dict[str, Any]) -> dict[str, Any]:
         """检查包含"""
         field_value = str(self._get_nested_field(actual, assertion.field) or "")
-        expected_values = (
-            assertion.expected
-            if isinstance(assertion.expected, list)
-            else [assertion.expected]
-        )
+        expected_values = assertion.expected if isinstance(assertion.expected, list) else [assertion.expected]
         matched = [val for val in expected_values if val in field_value]
         passed = len(matched) > 0
         return {
@@ -85,9 +77,7 @@ class BaseEvaluator(ABC):
             "weight": assertion.weight,
         }
 
-    def _check_not_contains(
-        self, assertion: EvalAssertion, actual: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _check_not_contains(self, assertion: EvalAssertion, actual: dict[str, Any]) -> dict[str, Any]:
         """检查不包含"""
         field_value = self._get_nested_field(actual, assertion.field)
 
@@ -100,11 +90,7 @@ class BaseEvaluator(ABC):
         else:
             field_value_str = ""
 
-        expected_values = (
-            assertion.expected
-            if isinstance(assertion.expected, list)
-            else [assertion.expected]
-        )
+        expected_values = assertion.expected if isinstance(assertion.expected, list) else [assertion.expected]
         found = [val for val in expected_values if val in field_value_str]
         passed = len(found) == 0
         return {
@@ -117,9 +103,7 @@ class BaseEvaluator(ABC):
             "weight": assertion.weight,
         }
 
-    async def _check_response_quality(
-        self, assertion: EvalAssertion, actual: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _check_response_quality(self, assertion: EvalAssertion, actual: dict[str, Any]) -> dict[str, Any]:
         """使用 LLM 评估响应质量"""
         if not assertion.rubric or not self.rubric:
             return {
@@ -145,9 +129,7 @@ class BaseEvaluator(ABC):
             "weight": assertion.weight,
         }
 
-    async def _llm_judge(
-        self, response: str, rubric_criteria: dict[str, Any]
-    ) -> float:
+    async def _llm_judge(self, response: str, rubric_criteria: dict[str, Any]) -> float:
         """使用 LLM 评分"""
         criteria_text = yaml.dump(rubric_criteria, allow_unicode=True)
         prompt = f"""评估以下响应的质量。

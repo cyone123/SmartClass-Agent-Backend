@@ -36,7 +36,7 @@ def test_skill_registry_parses_extended_frontmatter(tmp_path: Path) -> None:
             "  - write_workspace_file\n"
             "  - run_workspace_code\n"
             "metadata:\n"
-            '  author: test\n'
+            "  author: test\n"
             '  version: "1.0"\n'
             "unknown-field: ignored\n"
             "---\n"
@@ -84,14 +84,7 @@ def test_run_skill_script_remains_available_without_workspace_permissions(tmp_pa
     skill_root = tmp_path / "skills" / "script-runner"
     _write_skill(
         skill_root,
-        body=(
-            "---\n"
-            "name: script-runner\n"
-            "description: Runs bundled scripts.\n"
-            "---\n"
-            "\n"
-            "# Script Runner\n"
-        ),
+        body=("---\nname: script-runner\ndescription: Runs bundled scripts.\n---\n\n# Script Runner\n"),
     )
     scripts_dir = skill_root / "scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)

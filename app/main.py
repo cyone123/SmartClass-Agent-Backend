@@ -16,8 +16,8 @@ from app.core.file_ingestion import FileIngestionRuntime
 from app.core.graph import warmup_structured_output_schemas
 from app.core.observability_bootstrap import configure_external_observability
 from app.core.rag import create_rag_runtime
-from app.core.speech import create_speech_runtime
 from app.core.skills import create_skill_registry
+from app.core.speech import create_speech_runtime
 from app.core.video_transcribe import create_video_transcription_runtime
 from app.dependencies.db import close_db_resources, init_db
 

@@ -66,8 +66,7 @@ def _configure_otel(app: FastAPI) -> None:
         raise ObservabilityConfigurationError("OTEL_ENABLED=true requires OTEL_EXPORTER_OTLP_ENDPOINT.")
 
     try:
-        from opentelemetry import metrics
-        from opentelemetry import trace
+        from opentelemetry import metrics, trace
         from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -140,5 +139,5 @@ def _configure_prometheus(app: FastAPI) -> None:
 
 def _metric_endpoint(trace_endpoint: str) -> str:
     if trace_endpoint.endswith("/v1/traces"):
-        return f"{trace_endpoint[:-len('/v1/traces')]}/v1/metrics"
+        return f"{trace_endpoint[: -len('/v1/traces')]}/v1/metrics"
     return trace_endpoint

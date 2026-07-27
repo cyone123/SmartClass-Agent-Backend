@@ -6,8 +6,8 @@ import logging
 import os
 import posixpath
 import re
-import shutil
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -36,13 +36,13 @@ from app.config import (
     get_file_storage_root,
     get_workspace_execution_backend,
 )
-from app.core.progress import emit_progress
 from app.core.observability import (
     categorize_error,
     observation_sink_from_config,
     record_metric,
     run_context_from_config,
 )
+from app.core.progress import emit_progress
 
 DEFAULT_EXECUTION_TIMEOUT_SECONDS = 30
 MAX_EXECUTION_OUTPUT_CHARS = 12000
@@ -128,18 +128,15 @@ class DaytonaExecutionSettings:
             missing.append("DAYTONA_TARGET")
         if missing:
             raise WorkspaceValidationError(
-                "Daytona workspace execution is enabled but required settings are missing: "
-                + ", ".join(missing)
+                "Daytona workspace execution is enabled but required settings are missing: " + ", ".join(missing)
             )
         if bool(snapshot) == bool(image):
             raise WorkspaceValidationError(
-                "Set exactly one of DAYTONA_SNAPSHOT or DAYTONA_IMAGE when Daytona workspace "
-                "execution is enabled."
+                "Set exactly one of DAYTONA_SNAPSHOT or DAYTONA_IMAGE when Daytona workspace execution is enabled."
             )
         if cleanup_policy not in DAYTONA_SUPPORTED_CLEANUP_POLICIES:
             raise WorkspaceValidationError(
-                "DAYTONA_CLEANUP_POLICY must be one of: "
-                + ", ".join(sorted(DAYTONA_SUPPORTED_CLEANUP_POLICIES))
+                "DAYTONA_CLEANUP_POLICY must be one of: " + ", ".join(sorted(DAYTONA_SUPPORTED_CLEANUP_POLICIES))
             )
         if not remote_root.startswith("/"):
             raise WorkspaceValidationError("DAYTONA_REMOTE_ROOT must be an absolute sandbox path.")
@@ -340,9 +337,7 @@ def _resolve_workspace_path(
     try:
         resolved.relative_to(workspace_root)
     except ValueError as exc:
-        raise WorkspaceValidationError(
-            "Path traversal outside the workspace is not allowed."
-        ) from exc
+        raise WorkspaceValidationError("Path traversal outside the workspace is not allowed.") from exc
 
     if resolved.exists():
         if resolved.is_dir() and not allow_directory:
@@ -516,8 +511,7 @@ class DaytonaExecutionBackend(ExecutionBackend):
             )
         except ImportError as exc:
             raise WorkspaceValidationError(
-                "Daytona workspace execution is enabled but the 'daytona' Python package "
-                "is not installed."
+                "Daytona workspace execution is enabled but the 'daytona' Python package is not installed."
             ) from exc
 
         self._sdk_cache = {
@@ -806,9 +800,7 @@ def create_workspace_execution_backend() -> ExecutionBackend:
         return LocalSubprocessExecutionBackend()
     if backend == "daytona":
         return DaytonaExecutionBackend()
-    raise WorkspaceValidationError(
-        "WORKSPACE_EXECUTION_BACKEND must be one of: local, daytona."
-    )
+    raise WorkspaceValidationError("WORKSPACE_EXECUTION_BACKEND must be one of: local, daytona.")
 
 
 def _workspace_backend_name(backend: ExecutionBackend) -> str:
@@ -855,9 +847,7 @@ class WorkspaceManager:
         try:
             content = resolved.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
-            raise WorkspaceValidationError(
-                f"Workspace file '{relative_path}' is not UTF-8 text."
-            ) from exc
+            raise WorkspaceValidationError(f"Workspace file '{relative_path}' is not UTF-8 text.") from exc
 
         truncated_content, truncated = _truncate_text(
             content,
@@ -915,15 +905,11 @@ class WorkspaceManager:
         try:
             content = resolved.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
-            raise WorkspaceValidationError(
-                f"Workspace file '{relative_path}' is not UTF-8 text."
-            ) from exc
+            raise WorkspaceValidationError(f"Workspace file '{relative_path}' is not UTF-8 text.") from exc
 
         occurrences = content.count(old_text)
         if occurrences == 0:
-            raise WorkspaceValidationError(
-                f"Workspace file '{relative_path}' does not contain the requested old_text."
-            )
+            raise WorkspaceValidationError(f"Workspace file '{relative_path}' does not contain the requested old_text.")
 
         requested_count = count if count and count > 0 else occurrences
         replace_count = min(occurrences, requested_count)

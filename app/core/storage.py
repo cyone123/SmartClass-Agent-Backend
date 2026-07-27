@@ -64,8 +64,7 @@ class StorageBackend(Protocol):
         filename: str,
         mime_type: str,
         sha256: str | None = None,
-    ) -> StoredObject:
-        ...
+    ) -> StoredObject: ...
 
     def put_file(
         self,
@@ -75,27 +74,20 @@ class StorageBackend(Protocol):
         filename: str,
         mime_type: str,
         sha256: str | None = None,
-    ) -> StoredObject:
-        ...
+    ) -> StoredObject: ...
 
-    def open_stream(self, key: str) -> BinaryIO:
-        ...
+    def open_stream(self, key: str) -> BinaryIO: ...
 
-    def read_bytes(self, key: str) -> bytes:
-        ...
+    def read_bytes(self, key: str) -> bytes: ...
 
-    def exists(self, key: str) -> bool:
-        ...
+    def exists(self, key: str) -> bool: ...
 
-    def delete(self, key: str) -> None:
-        ...
+    def delete(self, key: str) -> None: ...
 
-    def presigned_get_url(self, key: str, *, filename: str | None = None) -> str | None:
-        ...
+    def presigned_get_url(self, key: str, *, filename: str | None = None) -> str | None: ...
 
     @contextlib.contextmanager
-    def materialize_temp_file(self, key: str, *, suffix: str = "") -> Iterator[Path]:
-        ...
+    def materialize_temp_file(self, key: str, *, suffix: str = "") -> Iterator[Path]: ...
 
 
 def _guess_mime_type(filename: str, fallback: str | None = None) -> str:
@@ -220,17 +212,13 @@ class MinioStorageBackend:
             if not value
         ]
         if missing:
-            raise StorageConfigurationError(
-                "Missing required MinIO configuration: " + ", ".join(missing)
-            )
+            raise StorageConfigurationError("Missing required MinIO configuration: " + ", ".join(missing))
 
         try:
             from minio import Minio
             from minio.error import S3Error
         except ImportError as exc:
-            raise StorageConfigurationError(
-                "MinIO storage backend requires the 'minio' package."
-            ) from exc
+            raise StorageConfigurationError("MinIO storage backend requires the 'minio' package.") from exc
 
         self._s3_error_type = S3Error
         self.bucket = bucket or ""
@@ -372,9 +360,14 @@ class StorageService:
     def backend_type(self) -> str:
         return self.backend.backend_type
 
-    def resolve_backend(self, *, storage_backend: str | None, storage_key: str | None, storage_path: str | None) -> tuple[StorageBackend, str]:
+    def resolve_backend(
+        self, *, storage_backend: str | None, storage_key: str | None, storage_path: str | None
+    ) -> tuple[StorageBackend, str]:
         if storage_backend == MINIO_STORAGE_BACKEND and storage_key:
-            return self.backend if self.backend.backend_type == MINIO_STORAGE_BACKEND else MinioStorageBackend(), storage_key
+            return (
+                self.backend if self.backend.backend_type == MINIO_STORAGE_BACKEND else MinioStorageBackend(),
+                storage_key,
+            )
         if storage_key and (storage_backend in {None, "", LOCAL_STORAGE_BACKEND}):
             return self.local_backend, storage_key
         if storage_path:

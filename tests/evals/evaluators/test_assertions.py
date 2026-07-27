@@ -1,6 +1,6 @@
 """Tests for assertion types and EvalAssertion model"""
+
 import pytest
-from typing import Any
 
 from app.core.evaluation import AssertionType, EvalAssertion
 

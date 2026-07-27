@@ -142,11 +142,7 @@ def get_otel_endpoint() -> str | None:
 
 
 def get_otel_protocol() -> str:
-    return (
-        get_env("OTEL_EXPORTER_OTLP_PROTOCOL")
-        or get_env("OTEL_OTLP_PROTOCOL")
-        or "http/protobuf"
-    ).strip().lower()
+    return (get_env("OTEL_EXPORTER_OTLP_PROTOCOL") or get_env("OTEL_OTLP_PROTOCOL") or "http/protobuf").strip().lower()
 
 
 def get_otel_sample_ratio() -> float:
@@ -292,11 +288,7 @@ def get_file_upload_max_size_bytes() -> int:
 
 def _parse_allowed_extensions(raw: str | None, default: str) -> set[str]:
     value = raw if raw is not None else default
-    return {
-        extension.strip().lower()
-        for extension in value.split(",")
-        if extension.strip()
-    }
+    return {extension.strip().lower() for extension in value.split(",") if extension.strip()}
 
 
 def get_allowed_knowledge_upload_extensions() -> set[str]:

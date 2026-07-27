@@ -135,7 +135,9 @@ def test_voice_transcription_api_returns_attachment_and_transcript(monkeypatch) 
         )
 
     async def run() -> None:
-        monkeypatch.setattr(file_service, "create_voice_attachment_from_upload", fake_create_voice_attachment_from_upload)
+        monkeypatch.setattr(
+            file_service, "create_voice_attachment_from_upload", fake_create_voice_attachment_from_upload
+        )
 
         app = FastAPI()
         app.include_router(file_router)
@@ -191,7 +193,9 @@ def test_voice_transcription_api_surfaces_provider_error(monkeypatch) -> None:
         )
 
     async def run() -> None:
-        monkeypatch.setattr(file_service, "create_voice_attachment_from_upload", fake_create_voice_attachment_from_upload)
+        monkeypatch.setattr(
+            file_service, "create_voice_attachment_from_upload", fake_create_voice_attachment_from_upload
+        )
 
         app = FastAPI()
         app.include_router(file_router)
