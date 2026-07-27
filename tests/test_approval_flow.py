@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from app.core import agent as agent_module
 from app.core import graph as graph_module
 from app.core.agent import AgentRuntime
 from app.core.graph import (
@@ -263,94 +264,6 @@ def test_artifact_fan_in_node_summarizes_only_revision_targets() -> None:
     assert "202" not in result["messages"][0].content
 
 
-def test_artifact_revision_router_node_targets_single_artifact() -> None:
-    state = {
-        "messages": [HumanMessage(content="把刚刚的PPT封面改成蓝绿色")],
-        "artifact_catalog": [
-            {
-                "id": 101,
-                "type": "ppt",
-                "title": "牛顿第一定律课件",
-                "storage_path": "D:/fake/source.pptx",
-                "revision_number": 1,
-                "is_current": True,
-            }
-        ],
-    }
-
-    result = artifact_revision_router_node(state)
-
-    assert result.goto == "ppt_revision_node"
-    assert result.update["feedback_type"] == "modify_ppt"
-    assert result.update["revision_source_artifacts"][0]["id"] == 101
-    assert result.update["ppt_result"]["status"] == "pending"
-
-
-def test_artifact_revision_router_node_requests_clarification_for_ambiguous_target() -> None:
-    state = {
-        "messages": [HumanMessage(content="把刚刚那个产物改得更简洁一点")],
-        "artifact_catalog": [
-            {"id": 101, "type": "ppt", "title": "课件", "storage_path": "D:/fake/source.pptx"},
-            {"id": 102, "type": "docx", "title": "教案", "storage_path": "D:/fake/source.docx"},
-        ],
-    }
-
-    result = artifact_revision_router_node(state)
-
-    assert result.goto == "artifact_revision_clarification_interrupt_node"
-
-
-def test_artifact_revision_clarification_interrupt_node_can_default_to_modify_all(monkeypatch) -> None:
-    state = {
-        "messages": [HumanMessage(content="帮我把刚才那个产物改一下")],
-        "artifact_catalog": [
-            {"id": 101, "type": "ppt", "title": "课件", "storage_path": "D:/fake/source.pptx"},
-            {"id": 102, "type": "docx", "title": "教案", "storage_path": "D:/fake/source.docx"},
-        ],
-    }
-
-    monkeypatch.setattr(
-        graph_module,
-        "interrupt",
-        lambda payload: {"action": "approve", "interrupt_id": "approval-revision"},
-    )
-    result = artifact_revision_clarification_interrupt_node(state)
-
-    assert list(result.goto) == ["ppt_revision_node", "docx_revision_node"]
-    assert result.update["feedback_type"] == "modify_all"
-    assert result.update["ppt_result"]["status"] == "pending"
-    assert result.update["lesson_plan_result"]["status"] == "pending"
-
-
-def test_artifact_fan_in_node_summarizes_only_revision_targets() -> None:
-    state = {
-        "revision_source_artifacts": [
-            {"id": 101, "type": "ppt"},
-        ],
-        "ppt_result": {
-            "status": "ready",
-            "artifact_id": 201,
-            "artifact_type": "ppt",
-            "title": "新版PPT",
-            "error": None,
-        },
-        "lesson_plan_result": {
-            "status": "ready",
-            "artifact_id": 202,
-            "artifact_type": "docx",
-            "title": "旧教案",
-            "error": None,
-        },
-    }
-
-    result = asyncio.run(artifact_fan_in_node(state))
-
-    assert len(result["revision_results"]) == 1
-    assert result["revision_results"][0]["artifact_type"] == "ppt"
-    assert "201" in result["messages"][0].content
-    assert "202" not in result["messages"][0].content
-
-
 def test_teaching_plan_review_interrupt_node_routes_selected_artifacts_only(monkeypatch) -> None:
     state = {
         "messages": [HumanMessage(content="鐢熸垚鏂规")],
@@ -373,94 +286,6 @@ def test_teaching_plan_review_interrupt_node_routes_selected_artifacts_only(monk
     assert "ppt_result" not in approve_result.update
     assert approve_result.update["lesson_plan_result"]["status"] == "pending"
     assert approve_result.update["game_result"]["status"] == "pending"
-
-
-def test_artifact_revision_router_node_targets_single_artifact() -> None:
-    state = {
-        "messages": [HumanMessage(content="把刚刚的PPT封面改成蓝绿色")],
-        "artifact_catalog": [
-            {
-                "id": 101,
-                "type": "ppt",
-                "title": "牛顿第一定律课件",
-                "storage_path": "D:/fake/source.pptx",
-                "revision_number": 1,
-                "is_current": True,
-            }
-        ],
-    }
-
-    result = artifact_revision_router_node(state)
-
-    assert result.goto == "ppt_revision_node"
-    assert result.update["feedback_type"] == "modify_ppt"
-    assert result.update["revision_source_artifacts"][0]["id"] == 101
-    assert result.update["ppt_result"]["status"] == "pending"
-
-
-def test_artifact_revision_router_node_requests_clarification_for_ambiguous_target() -> None:
-    state = {
-        "messages": [HumanMessage(content="把刚刚那个产物改得更简洁一点")],
-        "artifact_catalog": [
-            {"id": 101, "type": "ppt", "title": "课件", "storage_path": "D:/fake/source.pptx"},
-            {"id": 102, "type": "docx", "title": "教案", "storage_path": "D:/fake/source.docx"},
-        ],
-    }
-
-    result = artifact_revision_router_node(state)
-
-    assert result.goto == "artifact_revision_clarification_interrupt_node"
-
-
-def test_artifact_revision_clarification_interrupt_node_can_default_to_modify_all(monkeypatch) -> None:
-    state = {
-        "messages": [HumanMessage(content="帮我把刚才那个产物改一下")],
-        "artifact_catalog": [
-            {"id": 101, "type": "ppt", "title": "课件", "storage_path": "D:/fake/source.pptx"},
-            {"id": 102, "type": "docx", "title": "教案", "storage_path": "D:/fake/source.docx"},
-        ],
-    }
-
-    monkeypatch.setattr(
-        graph_module,
-        "interrupt",
-        lambda payload: {"action": "approve", "interrupt_id": "approval-revision"},
-    )
-    result = artifact_revision_clarification_interrupt_node(state)
-
-    assert list(result.goto) == ["ppt_revision_node", "docx_revision_node"]
-    assert result.update["feedback_type"] == "modify_all"
-    assert result.update["ppt_result"]["status"] == "pending"
-    assert result.update["lesson_plan_result"]["status"] == "pending"
-
-
-def test_artifact_fan_in_node_summarizes_only_revision_targets() -> None:
-    state = {
-        "revision_source_artifacts": [
-            {"id": 101, "type": "ppt"},
-        ],
-        "ppt_result": {
-            "status": "ready",
-            "artifact_id": 201,
-            "artifact_type": "ppt",
-            "title": "新版PPT",
-            "error": None,
-        },
-        "lesson_plan_result": {
-            "status": "ready",
-            "artifact_id": 202,
-            "artifact_type": "docx",
-            "title": "旧教案",
-            "error": None,
-        },
-    }
-
-    result = asyncio.run(artifact_fan_in_node(state))
-
-    assert len(result["revision_results"]) == 1
-    assert result["revision_results"][0]["artifact_type"] == "ppt"
-    assert "201" in result["messages"][0].content
-    assert "202" not in result["messages"][0].content
 
 
 def test_artifact_fan_in_node_summarizes_only_generation_targets() -> None:
@@ -524,7 +349,25 @@ def test_validate_approval_request_rejects_stale_interrupt_id() -> None:
     asyncio.run(run())
 
 
-def test_stream_agent_events_emits_approval_without_suggestions() -> None:
+def test_stream_agent_events_emits_approval_without_suggestions(monkeypatch) -> None:
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+    async def _fake_list_artifacts(db, *, thread_id, user_id):
+        _ = db, thread_id, user_id
+        return []
+
+    monkeypatch.setattr(agent_module, "AsyncSessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(
+        agent_module.artifact_service,
+        "list_latest_ready_current_artifacts_by_thread",
+        _fake_list_artifacts,
+    )
+
     approval_payload = {
         "stage": "metadata_review",
         "title": "确认结构化教学要素",

@@ -30,6 +30,8 @@ os.environ.setdefault("STRUCTURED_PROMPT_CACHE_ENABLED", "false")
 os.environ.setdefault("STT_MODEL", "test-stt-model")
 os.environ.setdefault("STT_API_KEY", "test-key")
 os.environ.setdefault("STT_BASE_URL", "https://example.com")
+# 测试必须与本机部署环境隔离：强制本地存储后端，避免读取根目录 .env 的 MinIO 配置
+os.environ.setdefault("STORAGE_BACKEND", "local")
 for proxy_key in (
     "ALL_PROXY",
     "all_proxy",
