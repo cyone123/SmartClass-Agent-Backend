@@ -1,0 +1,67 @@
+name: Agent Evaluation
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 20 * * *" # 北京时间每日 04:00 巡检
+  workflow_dispatch:
+
+concurrency:
+  group: eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: smartclass_eval
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/smartclass_eval
+      MODEL: ${{ secrets.EVAL_MODEL }}
+      API_KEY: ${{ secrets.EVAL_API_KEY }}
+      BASE_URL: ${{ secrets.EVAL_BASE_URL }}
+      STRUCTED_MDOEL: ${{ secrets.EVAL_MODEL }}
+      STRUCTED_API_KEY: ${{ secrets.EVAL_API_KEY }}
+      STRUCTED_BASE_URL: ${{ secrets.EVAL_BASE_URL }}
+      SMALL_MDOEL: ${{ secrets.EVAL_MODEL }}
+      SMALL_API_KEY: ${{ secrets.EVAL_API_KEY }}
+      SMALL_BASE_URL: ${{ secrets.EVAL_BASE_URL }}
+      STRUCTURED_FAST_MODEL: ${{ secrets.EVAL_MODEL }}
+      STRUCTURED_FAST_API_KEY: ${{ secrets.EVAL_API_KEY }}
+      STRUCTURED_FAST_BASE_URL: ${{ secrets.EVAL_BASE_URL }}
+      STT_MODEL: ${{ secrets.EVAL_MODEL }}
+      STT_API_KEY: ${{ secrets.EVAL_API_KEY }}
+      STT_BASE_URL: ${{ secrets.EVAL_BASE_URL }}
+      PROMETHEUS_ENABLED: "false"
+      OBSERVABILITY_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run eval suite
+        run: python -m tests.evals.cli run
+      - name: Regression gate
+        run: python -m tests.evals.check_regression
+      - name: Upload eval report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-report-${{ github.run_number }}
+          path: tests/evals/results/eval_*.json
+          retention-days: 90

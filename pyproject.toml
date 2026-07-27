@@ -1,0 +1,20 @@
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["storage", "node_modules"]
+
+[tool.ruff.lint]
+# 保守起步：语法/逻辑错误(E/F)、警告(W)、import 排序(I)；风格类规则后续再开
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501", # 行长交给 formatter 处理
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 评估 CLI 与 conftest 需要在 import 前设置环境变量
+"tests/**" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--ignore=tests/evals"
+asyncio_mode = "auto"
