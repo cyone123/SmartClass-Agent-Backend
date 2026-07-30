@@ -23,13 +23,15 @@ expectations:
 
 assertions:
   - type: "contains"
-    field: "extracted_elements.subject"
+    field: "teaching_metadata.subject"
     expected: "数学"
     weight: 0.9
 
   - type: "hallucination_check"
-    field: "extracted_elements.grade"
-    expected: ["虚构", "编造"]
+    field: "teaching_metadata.grade"
+    expected:
+      source_field: "input_message"
+      allowed_values: [null, "", "未知", "unknown", "不清楚"]
     weight: 0.7
 
 metadata:

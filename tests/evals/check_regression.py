@@ -1,36 +1,38 @@
-"""回归测试基准检查脚本
+"""Fail-closed regression gate for schema-versioned evaluation reports."""
 
-该脚本读取最新的评估结果，检查关键指标是否满足回归基准要求。
-"""
+from __future__ import annotations
 
+import argparse
 import json
-import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any
 
-# 修复 Windows 控制台编码问题
-if sys.platform == "win32":
-    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
+import yaml
 
 
 class RegressionCheckResult:
-    """回归检查结果"""
-
-    def __init__(self):
-        self.metrics: Dict[str, Dict] = {}
+    def __init__(self) -> None:
+        self.metrics: dict[str, dict[str, Any]] = {}
         self.overall_status = "PASS"
-        self.failed_metrics: List[str] = []
-        self.warnings: List[str] = []
+        self.failed_metrics: list[str] = []
+        self.warnings: list[str] = []
 
-    def add_metric(self, name: str, actual: float, expected: float, threshold_type: str = ">="):
-        """添加指标检查结果"""
-        passed = self._check_threshold(actual, expected, threshold_type)
+    def add_metric(
+        self,
+        name: str,
+        actual: float,
+        expected: float,
+        threshold_type: str = ">=",
+    ) -> None:
+        comparisons = {
+            ">=": actual >= expected,
+            "==": actual == expected,
+            "<=": actual <= expected,
+        }
+        if threshold_type not in comparisons:
+            raise ValueError(f"Unsupported threshold type: {threshold_type}")
+        passed = comparisons[threshold_type]
         self.metrics[name] = {
             "actual": actual,
             "expected": expected,
@@ -38,224 +40,140 @@ class RegressionCheckResult:
             "passed": passed,
         }
         if not passed:
-            self.failed_metrics.append(name)
-            self.overall_status = "FAIL"
+            self.fail(name)
 
-    def add_warning(self, message: str):
-        """添加警告信息"""
+    def fail(self, name: str) -> None:
+        if name not in self.failed_metrics:
+            self.failed_metrics.append(name)
+        self.overall_status = "FAIL"
+
+    def add_warning(self, message: str) -> None:
         self.warnings.append(message)
 
-    @staticmethod
-    def _check_threshold(actual: float, expected: float, threshold_type: str) -> bool:
-        """检查阈值"""
-        if threshold_type == ">=":
-            return actual >= expected
-        elif threshold_type == "==":
-            return actual == expected
-        elif threshold_type == "<=":
-            return actual <= expected
-        return False
+
+def default_thresholds_path() -> Path:
+    return Path(__file__).with_name("regression_thresholds.yaml")
 
 
-def find_latest_result(results_dir: Path) -> Optional[Path]:
-    """找到最新的评估结果文件"""
-    if not results_dir.exists():
-        return None
-
-    eval_files = list(results_dir.glob("eval_*.json"))
-    if not eval_files:
-        return None
-
-    # 按修改时间排序，返回最新的
-    latest = sorted(eval_files, key=lambda p: p.stat().st_mtime, reverse=True)[0]
-    return latest
+def load_thresholds(path: Path | None = None) -> dict[str, Any]:
+    target = path or default_thresholds_path()
+    with open(target, "r", encoding="utf-8") as file:
+        data = yaml.safe_load(file)
+    if not isinstance(data, dict) or not isinstance(data.get("required_categories"), dict):
+        raise ValueError(f"Invalid regression thresholds: {target}")
+    return data
 
 
-def load_eval_result(result_file: Path) -> Optional[Dict]:
-    """加载评估结果文件"""
-    try:
-        with open(result_file, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"❌ Failed to load result file: {e}")
-        return None
+def load_eval_result(path: Path) -> dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as file:
+        data = json.load(file)
+    if not isinstance(data, dict):
+        raise ValueError(f"Evaluation report must be a JSON object: {path}")
+    return data
 
 
-def extract_category_scores(eval_data: Dict) -> Dict[str, float]:
-    """从评估数据中提取分类分数"""
-    return eval_data.get("category_scores", {})
+def find_latest_result(results_dir: Path) -> Path | None:
+    candidates = sorted(results_dir.glob("eval_*.json"), key=lambda path: path.stat().st_mtime)
+    return candidates[-1] if candidates else None
 
 
-def extract_pass_rate(eval_data: Dict) -> float:
-    """计算总体通过率"""
-    total = eval_data.get("total_cases", 0)
-    if total == 0:
-        return 0.0
-    passed = eval_data.get("passed", 0)
-    return passed / total
+def is_legacy_report(eval_data: dict[str, Any]) -> bool:
+    return str(eval_data.get("schema_version") or "").strip() != "2.0"
 
 
-def check_regression(eval_data: Dict) -> RegressionCheckResult:
-    """检查回归基准
-
-    关键指标：
-    - intent_recognition: 100% 必须通过（CRITICAL）
-    - memory_retrieval: ≥80% 通过率（HIGH）
-    - extraction_quality: ≥80% 通过率（HIGH）
-    """
+def check_regression(
+    eval_data: dict[str, Any],
+    thresholds: dict[str, Any] | None = None,
+) -> RegressionCheckResult:
+    thresholds = thresholds or load_thresholds()
     result = RegressionCheckResult()
 
-    category_scores = extract_category_scores(eval_data)
+    if is_legacy_report(eval_data):
+        result.fail("schema_version")
+        result.add_warning("Legacy reports are read-only and cannot pass the regression gate.")
+        return result
 
-    # 检查意图识别（CRITICAL）
-    intent_score = category_scores.get("intent_recognition", 0.0)
-    result.add_metric("intent_recognition", actual=intent_score * 100, expected=100.0, threshold_type="==")
+    category_metrics = eval_data.get("category_metrics")
+    if not isinstance(category_metrics, dict):
+        result.fail("category_metrics")
+        return result
 
-    # 检查记忆检索（HIGH）
-    memory_retrieval_score = category_scores.get("memory_retrieval", 0.0)
-    if memory_retrieval_score > 0:
-        result.add_metric("memory_retrieval", actual=memory_retrieval_score * 100, expected=80.0, threshold_type=">=")
-    else:
-        result.add_warning("memory_retrieval: 无评估数据（跳过检查）")
+    total_errors = int(eval_data.get("error", 0))
+    result.add_metric(
+        "overall.error_count",
+        actual=float(total_errors),
+        expected=float(thresholds.get("max_error_count", 0)),
+        threshold_type="<=",
+    )
 
-    # 检查提取质量（HIGH）
-    extraction_score = category_scores.get("extraction_quality", 0.0)
-    if extraction_score > 0:
-        result.add_metric("extraction_quality", actual=extraction_score * 100, expected=80.0, threshold_type=">=")
-    else:
-        result.add_warning("extraction_quality: 无评估数据（跳过检查）")
-
-    # 检查总体通过率
-    overall_pass_rate = extract_pass_rate(eval_data)
-    if overall_pass_rate < 0.7:
-        result.add_warning(
-            f"Overall pass rate is low: {overall_pass_rate * 100:.1f}% (recommendation: investigate failures)"
+    for category, rule in thresholds["required_categories"].items():
+        metrics = category_metrics.get(category)
+        if not isinstance(metrics, dict):
+            result.fail(f"{category}.present")
+            continue
+        error_count = int(metrics.get("error", 0))
+        pass_rate = float(metrics.get("pass_rate", 0.0))
+        result.add_metric(
+            f"{category}.error_count",
+            actual=float(error_count),
+            expected=0.0,
+            threshold_type="==",
+        )
+        result.add_metric(
+            f"{category}.pass_rate",
+            actual=pass_rate,
+            expected=float(rule["min_pass_rate"]),
+            threshold_type=">=",
         )
 
     return result
 
 
-def print_regression_report(eval_data: Dict, check_result: RegressionCheckResult):
-    """打印回归测试报告"""
-
-    print()
+def print_regression_report(eval_data: dict[str, Any], check_result: RegressionCheckResult) -> None:
+    print("\n" + "=" * 70)
+    print("[REGRESSION] Evaluation regression gate")
     print("=" * 70)
-    print("[REGRESSION] Regression Test Results")
-    print("=" * 70)
-
-    # 打印每个指标
-    for metric_name, metric_data in check_result.metrics.items():
-        status = "PASS" if metric_data["passed"] else "FAIL"
-        status_symbol = "✅" if metric_data["passed"] else "❌"
-
-        actual = metric_data["actual"]
-        expected = metric_data["expected"]
-        threshold_type = metric_data["threshold_type"]
-
-        if threshold_type == "==":
-            match_str = f"{actual:.1f}% (expected {expected:.1f}%)"
-        else:
-            match_str = f"{actual:.1f}% ({threshold_type} {expected:.1f}%)"
-
-        print(f"[{status}] {metric_name:<30} {match_str:<30} {status_symbol}")
-
-    # 打印警告
-    if check_result.warnings:
-        print()
-        print("[WARNINGS]")
-        for warning in check_result.warnings:
-            print(f"  ⚠️  {warning}")
-
-    # 打印总体状态
-    print()
-    if check_result.overall_status == "PASS":
-        print("Overall: PASS ✅")
-        print()
-    else:
-        print("Overall: FAIL ❌")
-        print()
-        print("[FAILED METRICS]")
-        for failed_metric in check_result.failed_metrics:
-            metric_data = check_result.metrics[failed_metric]
-            actual = metric_data["actual"]
-            expected = metric_data["expected"]
-            print(f"  - {failed_metric}: expected {expected:.1f}%, got {actual:.1f}%")
-        print()
-
-    # 打印详细信息
-    print("[SUMMARY]")
-    print(f"  Total cases: {eval_data.get('total_cases', 0)}")
-    print(f"  Passed: {eval_data.get('passed', 0)}")
-    print(f"  Failed: {eval_data.get('failed', 0)}")
-    print(f"  Error: {eval_data.get('error', 0)}")
-    print(f"  Average score: {eval_data.get('avg_score', 0):.3f}")
-    print(f"  Execution time: {eval_data.get('execution_time', 0):.2f}s")
-
-    timestamp = eval_data.get("timestamp", "unknown")
-    print(f"  Timestamp: {timestamp}")
-    print()
+    for name, metric in check_result.metrics.items():
+        status = "PASS" if metric["passed"] else "FAIL"
+        print(
+            f"[{status}] {name}: {metric['actual']:.3f} "
+            f"{metric['threshold_type']} {metric['expected']:.3f}"
+        )
+    for missing in sorted(name for name in check_result.failed_metrics if name.endswith(".present")):
+        print(f"[FAIL] {missing}: required category is missing")
+    for warning in check_result.warnings:
+        print(f"[WARNING] {warning}")
+    print(f"Overall: {check_result.overall_status}")
+    print(
+        f"Summary: total={eval_data.get('total_cases', 0)}, "
+        f"passed={eval_data.get('passed', 0)}, failed={eval_data.get('failed', 0)}, "
+        f"error={eval_data.get('error', 0)}, pass_rate={eval_data.get('pass_rate', 0):.3f}, "
+        f"avg_score={eval_data.get('avg_score', 0):.3f}"
+    )
 
 
-def print_usage_hints():
-    """打印使用提示"""
-    print()
-    print("[HINTS] To run evaluations and check regression:")
-    print()
-    print("  1. Run full evaluation suite:")
-    print("     python -m tests.evals.cli run")
-    print()
-    print("  2. Check regression baseline:")
-    print("     python -m tests.evals.check_regression")
-    print()
-    print("  3. Run specific category:")
-    print("     python -m tests.evals.cli run --category intent_recognition")
-    print()
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--report", type=Path, help="Report to check; defaults to latest local result")
+    parser.add_argument("--thresholds", type=Path, help="Optional threshold configuration")
+    return parser
 
 
-def main():
-    """主函数"""
-
-    # 确定结果目录
-    evals_dir = Path(__file__).parent
-    results_dir = evals_dir / "results"
-
-    # 查找最新结果
-    latest_result = find_latest_result(results_dir)
-
-    if not latest_result:
-        print()
-        print("=" * 70)
-        print("[ERROR] No evaluation results found")
-        print("=" * 70)
-        print()
-        print(f"Expected results directory: {results_dir}")
-        print()
-        print_usage_hints()
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    report_path = args.report or find_latest_result(Path(__file__).with_name("results"))
+    if report_path is None:
+        print("[ERROR] No evaluation report found")
         return 1
-
-    # 加载评估结果
-    eval_data = load_eval_result(latest_result)
-
-    if not eval_data:
+    try:
+        eval_data = load_eval_result(report_path)
+        thresholds = load_thresholds(args.thresholds)
+        check_result = check_regression(eval_data, thresholds)
+    except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
+        print(f"[ERROR] {exc}")
         return 1
-
-    # 检查回归基准
-    check_result = check_regression(eval_data)
-
-    # 打印报告
     print_regression_report(eval_data, check_result)
-
-    # 返回适当的 exit code
-    exit_code = 0 if check_result.overall_status == "PASS" else 1
-
-    if exit_code == 0:
-        print("[SUCCESS] All regression checks passed! ✅")
-    else:
-        print("[FAILURE] Regression checks failed! ❌")
-
-    print()
-
-    return exit_code
+    return 0 if check_result.overall_status == "PASS" else 1
 
 
 if __name__ == "__main__":

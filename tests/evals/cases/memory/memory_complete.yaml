@@ -26,17 +26,13 @@ expectations:
 
 assertions:
   - type: "memory_check"
-    field: "profile_memory_context"
+    field: "profile_memory_created"
     expected: {"should_exist": true}
     weight: 1.0
   - type: "contains"
     field: "profile_memory_content"
-    expected: ["案例分析法", "小组讨论", "高中生物"]
+    expected: {"all": ["案例分析法", "小组讨论", "高中生物"]}
     weight: 0.8
-  - type: "semantic_match"
-    field: "profile_memory_content"
-    expected: "教学方法偏好"
-    weight: 0.7
 
 metadata:
   author: "eval_designer"

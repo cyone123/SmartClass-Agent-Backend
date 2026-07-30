@@ -1,236 +1,107 @@
 # SmartClass 评估系统
 
-## 概述
+该目录提供 Agent 行为评估、严格用例校验、回归门禁和可提交 benchmark 证据。当前数据集共 24 个 YAML 用例；目录名只负责组织文件，分类语义以 YAML 的 `category` 字段为准。
 
-评估系统用于验证 Agent 行为的正确性、稳定性和安全性。支持多维度评估，包括意图识别、记忆管理、教学要素抽取等。
+## 当前用例
 
-**当前进度：Phase 2 ✅ 完成**
+| Category | 用例数 | 默认运行模式 |
+| --- | ---: | --- |
+| `intent_recognition` | 5 | `model-eval` |
+| `memory_retrieval` | 3 | `model-eval` |
+| `memory_write` | 4 | `model-eval` |
+| `memory_update` | 1 | `model-eval` |
+| `extraction_quality` | 7 | `model-eval` |
+| `context_compression` | 4 | `deterministic` |
+| **合计** | **24** | |
 
-## 快速开始
+## 安装与离线门禁
+
+从 `backend` 目录执行：
 
 ```bash
-cd backend
+python -m pip install -r requirements-dev.txt
+python -m tests.evals.cli validate-suite --expected-count 24
+python -m pytest tests/evals -q
+```
 
-# 运行所有评估
+`validate-suite` 不加载模型，也不访问数据库。它会递归发现全部 YAML，并严格检查：
+
+- YAML/Pydantic Schema；
+- `case_id` 唯一性；
+- category 是否受支持；
+- 每个断言是否有注册处理器；
+- 断言引用字段是否属于对应 evaluator 的稳定输出契约。
+
+任何解析失败、未知断言、非法字段或期望数量不符都会返回非零退出码，不允许静默跳过。
+
+## 运行真实评估
+
+真实评估需要数据库、模型服务和相应环境变量，不属于普通 push 的强制门禁：
+
+```bash
+python -m tests.evals.cli list-categories
+python -m tests.evals.cli run --category intent_recognition
+python -m tests.evals.cli run --case-id intent_basic_chat_001 --verbose
 python -m tests.evals.cli run
-
-# 运行特定类别
-python -m tests.evals.cli run --category memory
-python -m tests.evals.cli run --category extraction
-
-# 运行单个用例
-python -m tests.evals.cli run --case-id memory_complete_001
-
-# 查看详细输出
-python -m tests.evals.cli run --verbose
 ```
 
-## 目录结构
+原始报告写入 `tests/evals/results/`，该目录中的运行结果默认被 Git 忽略。
 
-```
-tests/evals/
-├── cases/                          # 评估用例（25 个）
-│   ├── intent/                     # 意图识别（5 个）
-│   ├── memory/                     # 记忆管理（8 个）
-│   └── extraction/                 # 要素抽取（7 个）
-├── evaluators/                     # 评估器实现
-│   ├── base.py                     # 基类
-│   ├── intent_evaluator.py        # 意图评估器
-│   ├── memory_evaluator.py        # 记忆评估器 (新)
-│   ├── extraction_evaluator.py    # 抽取评估器 (新)
-│   └── test_*.py                  # 单元测试
-├── runners/                        # 评估运行器
-│   └── eval_runner.py
-├── rubrics/                        # 评分标准
-│   └── *.yaml
-├── results/                        # 评估结果
-└── cli.py                          # CLI 工具
-```
+## 报告契约
 
-## 评估类别与用例
+当前报告 `schema_version` 为 `2.0`，核心字段包括：
 
-| 类别 | 描述 | 用例数 | 状态 | 评估维度 |
-|------|------|--------|------|---------|
-| `intent_recognition` | 意图识别 | 5 | ✅ | 路由分流、响应质量 |
-| `memory_retrieval` | 记忆检索 | 4 | ✅ | 加载准确性、隐私保护 |
-| `memory_write` | 记忆写入 | 4 | ✅ | 内容完整性、安全性 |
-| `extraction_quality` | 要素抽取 | 7 | ✅ | 完整性、准确度、无幻觉 |
-| **总计** | | **25** | **✅** | **11 种断言类型** |
+- `run_mode`：`deterministic`、`smoke` 或 `model-eval`；
+- `total_cases`、`passed`、`failed`、`error`；
+- `pass_rate` 与 `error_rate`；
+- `avg_score`，与通过率分开统计；
+- `category_metrics`，保存每个 category 的样本量、通过率、错误率和平均分；
+- `dataset_fingerprint`、`git_commit`、非敏感模型摘要和运行环境 manifest。
 
-## 评估用例详情
+旧版 JSON 可被读取用于排查，但不能通过回归门禁，也不能直接晋升为新基线。
 
-### 意图识别（Phase 1 ✅）
-- `intent_basic_chat_001` - 基础闲聊
-- `intent_teaching_plan_001` - 教学规划
-- `intent_artifact_revision_001` - 产物修改
-- `intent_ambiguous_001` - 模糊请求
-- `intent_mixed_001` - 混合意图
+## 回归门禁
 
-### 记忆检索（Phase 2 ✅）
-- `memory_load_profile_001` - 加载用户画像
-- `memory_load_experience_001` - 加载教学经验
-- `memory_no_irrelevant_001` - 忽略无关记忆
-- `memory_edge_case_001` - 边界情况
+阈值定义在 `regression_thresholds.yaml`。以下条件均采用 fail-closed：
 
-### 记忆写入（Phase 2 ✅）
-- `memory_complete_001` - 完整写入
-- `memory_update_001` - 更新现有记忆
-- `memory_privacy_001` - 隐私保护检查
-- `memory_not_created_001` - 不应创建
-
-### 要素抽取（Phase 2 ✅）
-- `extraction_complete_001` - 完整抽取
-- `extraction_subject_grade_001` - 学科年级
-- `extraction_topic_001` - 主题提取
-- `extraction_incomplete_001` - 不完整处理
-- `extraction_hallucination_001` - 幻觉检测
-- `extraction_partial_hallucination_001` - 部分幻觉
-- `extraction_edge_case_001` - 边界情况
-
-## 断言类型
-
-### 基础断言（Phase 1）
-- `route_match` - 路由匹配
-- `contains` - 包含检查
-- `not_contains` - 不包含检查
-- `response_quality` - 响应质量（LLM 评判）
-
-### 记忆断言（Phase 2）
-- `memory_loaded` - 记忆加载检查
-- `memory_not_loaded` - 记忆不应加载
-- `memory_content_check` - 记忆内容校验
-- `privacy_check` - 隐私检查
-
-### 抽取断言（Phase 2）
-- `extraction_completeness` - 完整性检查
-- `extraction_accuracy` - 准确度评估
-- `no_hallucination` - 幻觉检测
-
-## 使用方式
-
-### 运行评估
+- 缺少任一必需 category；
+- 总体或分类存在 `ERROR`；
+- 任一分类通过率低于阈值；
+- 报告不是 Schema 2.0。
 
 ```bash
-# 所有评估
-python -m tests.evals.cli run
-
-# 特定类别
-python -m tests.evals.cli run --category memory
-python -m tests.evals.cli run --category extraction
-
-# 特定用例
-python -m tests.evals.cli run --case-id memory_complete_001
-
-# 详细输出
-python -m tests.evals.cli run --verbose
+python -m tests.evals.check_regression \
+  --report tests/evals/fixtures/reports/passing.json
 ```
 
-### 验证用例
+`fixtures/reports/` 同时包含阈值下降、缺失类别、运行错误和 legacy 失败样例。
+
+## 晋升 benchmark
+
+只有通过回归门禁的新报告才能晋升：
 
 ```bash
-python -m tests.evals.cli validate tests/evals/cases/memory/load_profile.yaml
+python -m tests.evals.cli promote-baseline \
+  --report tests/evals/fixtures/reports/passing.json \
+  --baseline-id my-baseline
 ```
 
-### 演示脚本
+输出位于根仓库 `docs/benchmarks/baselines/<baseline-id>/`：
 
-```bash
-python -m tests.evals.demo
-```
+- `manifest.yaml`
+- `summary.json`
+- `report.md`
 
-## 评估用例格式
+证据文件只允许聚合指标和非敏感运行元数据，不写入 prompt、completion、记忆正文、附件正文、JWT、签名 URL、对象 key、宿主机路径或完整异常正文。相同 baseline ID 默认不可覆盖；必须显式传入 `--replace`。
 
-每个用例是一个 YAML 文件，包含：
+## CI
 
-```yaml
-case_id: memory_complete_001
-category: memory_write
-description: "完整的记忆写入评估"
-version: "1.0"
+现有 `.github/workflows/integration.yml` 已扩展为：
 
-input:
-  user_id: "test_user"
-  message: "请记住我偏好互动式教学"
+- `backend-unit`：Ruff + 默认 pytest；
+- `eval-harness`：24/24 严格校验 + 评估基础设施测试；
+- `eval-regression-smoke`：验证成功与 fail-closed fixtures，并上传脱敏 smoke 证据；
+- `frontend-build`：前端依赖安装与构建；
+- `compose-smoke`：Compose 配置及后端镜像构建。
 
-context:
-  plan_id: "plan_123"
-  thread_id: "thread_456"
-
-expectations:
-  memory_created: true
-  memory_type: "profile"
-
-assertions:
-  - type: "memory_loaded"
-    namespace: ["users", "test_user", "profile"]
-    expected: true
-    weight: 1.0
-
-metadata:
-  author: "eval_team"
-  created_at: "2026-06-12"
-  tags: ["memory", "write"]
-```
-
-## 项目阶段
-
-### Phase 1 ✅
-- 评估框架
-- 意图识别评估器
-- 5 个基准用例
-- CLI 工具
-- Windows 兼容
-
-### Phase 2 ✅
-- 记忆评估器（加载 & 写入）
-- 抽取评估器
-- 15 个新用例
-- 7 种新断言类型
-- 回归测试体系
-- 完整文档
-
-### Phase 3 📋
-- 产物生成与修改评估
-- 安全性与权限评估
-- 性能基准测试
-- CI/CD 集成
-
-## 文档
-
-| 文档 | 用途 |
-|------|------|
-| [QUICKSTART.md](./QUICKSTART.md) | 快速开始指南 |
-| [CHEATSHEET.md](./CHEATSHEET.md) | 快速参考卡 |
-| [PHASE2_SUMMARY.md](./PHASE2_SUMMARY.md) | Phase 2 完成总结 |
-| [IMPLEMENTATION_NOTES.md](./IMPLEMENTATION_NOTES.md) | 实现细节 |
-| [FINAL_SUMMARY.md](./FINAL_SUMMARY.md) | 完整技术总结 |
-
-## 环境要求
-
-- PostgreSQL 数据库运行中
-- 配置模型 API（MODEL, API_KEY, BASE_URL）
-- Python 3.11+
-- 依赖已安装
-
-## 常见问题
-
-### Windows asyncio 错误
-已在 `cli.py` 中修复，使用 `WindowsSelectorEventLoopPolicy`
-
-### Prometheus 依赖缺失
-已在 `cli.py` 中禁用，设置 `PROMETHEUS_ENABLED=false`
-
-### 控制台编码错误
-已在 `cli.py` 中修复，使用 UTF-8 编码
-
-## 评分规则
-
-- 加权总分 = Σ(断言分数 × 权重) / Σ(权重)
-- 权重 ≥ 0.5 的断言必须全部通过才算 PASSED
-- 分数范围：0.0 - 1.0
-
-## 下一步
-
-- 集成到 CI/CD 流程
-- 构建评估基准数据库
-- 实现自动回归检测
-- 添加 Phase 3 产物生成评估
+普通 push 不读取真实模型 API Key；真实模型评估应使用独立、人工触发的工作流。

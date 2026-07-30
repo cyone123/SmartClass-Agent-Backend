@@ -38,17 +38,17 @@ assertions:
     weight: 1.0
 
   - type: "contains"
-    field: "extracted_elements.subject"
+    field: "teaching_metadata.subject"
     expected: "数学"
     weight: 0.8
 
   - type: "contains"
-    field: "extracted_elements.grade"
+    field: "teaching_metadata.grade"
     expected: "初中"
     weight: 0.8
 
   - type: "contains"
-    field: "extracted_elements.topic"
+    field: "teaching_metadata.topic"
     expected: "勾股定理"
     weight: 0.8
 

@@ -1,291 +1,102 @@
-"""BaseEvaluator 单元测试"""
+from __future__ import annotations
+
+import asyncio
 
 import pytest
 
 from app.core.evaluation import AssertionType, EvalAssertion
-from tests.evals.evaluators.base import BaseEvaluator
+from tests.evals.evaluators.base import BaseEvaluator, JudgeEvaluationError
 
 
 class ConcreteEvaluator(BaseEvaluator):
-    """BaseEvaluator 的具体实现，用于测试"""
-
     async def evaluate(self, case):
-        """实现抽象方法"""
-        pass
+        raise NotImplementedError
 
 
 @pytest.fixture
-def evaluator():
-    """创建评估器实例"""
+def evaluator() -> ConcreteEvaluator:
     return ConcreteEvaluator()
 
 
-class TestCheckMemoryCheck:
-    """测试 _check_memory_check 方法"""
-
-    def test_check_memory_check_exists(self, evaluator):
-        """检查记忆存在的情况"""
-        # 准备测试数据
-        assertion = EvalAssertion(
+def test_registry_executes_all_deterministic_assertions(evaluator: ConcreteEvaluator) -> None:
+    actual = {
+        "route": "chat",
+        "text": "数学 互动式教学",
+        "items": [1, 2],
+        "missing": None,
+    }
+    assertions = [
+        EvalAssertion(type=AssertionType.ROUTE_MATCH, field="route", expected="chat"),
+        EvalAssertion(type=AssertionType.CONTAINS, field="text", expected={"all": ["数学", "互动"]}),
+        EvalAssertion(type=AssertionType.NOT_CONTAINS, field="text", expected=["密码"]),
+        EvalAssertion(type=AssertionType.COUNT_CHECK, field="items", expected={"should_equal": 2}),
+        EvalAssertion(type=AssertionType.ENCODING_CHECK, field="text", expected="utf8_valid"),
+        EvalAssertion(
             type=AssertionType.MEMORY_CHECK,
-            field="memory.profile",
-            expected={
-                "type": "profile",
-                "should_exist": True,
-            },
-            weight=1.0,
-        )
+            field="missing",
+            expected={"should_exist": False},
+        ),
+    ]
 
-        actual = {
-            "memory": {
-                "profile": {"teacher_level": "intermediate", "subject": "math"},
-            }
-        }
-
-        # 执行检查
-        result = evaluator._check_memory_check(assertion, actual)
-
-        # 验证结果
-        assert result["assertion_type"] == "memory_check"
-        assert result["field"] == "memory.profile"
-        assert result["memory_type"] == "profile"
-        assert result["should_exist"] is True
-        assert result["actual_exists"] is True
-        assert result["passed"] is True
-        assert result["score"] == 1.0
-        assert result["weight"] == 1.0
-
-    def test_check_memory_check_not_exists(self, evaluator):
-        """检查记忆不存在的情况"""
-        # 准备测试数据
-        assertion = EvalAssertion(
-            type=AssertionType.MEMORY_CHECK,
-            field="memory.experience",
-            expected={
-                "type": "experience",
-                "should_exist": False,
-            },
-            weight=1.0,
-        )
-
-        actual = {
-            "memory": {
-                "profile": {"teacher_level": "intermediate"},
-                "experience": None,
-            }
-        }
-
-        # 执行检查
-        result = evaluator._check_memory_check(assertion, actual)
-
-        # 验证结果
-        assert result["assertion_type"] == "memory_check"
-        assert result["field"] == "memory.experience"
-        assert result["memory_type"] == "experience"
-        assert result["should_exist"] is False
-        assert result["actual_exists"] is False
-        assert result["passed"] is True
-        assert result["score"] == 1.0
-
-    def test_check_memory_check_exists_but_should_not(self, evaluator):
-        """检查记忆存在但不应该存在的情况"""
-        # 准备测试数据
-        assertion = EvalAssertion(
-            type=AssertionType.MEMORY_CHECK,
-            field="memory.experience",
-            expected={
-                "type": "experience",
-                "should_exist": False,
-            },
-            weight=1.0,
-        )
-
-        actual = {
-            "memory": {
-                "experience": [{"title": "Math teaching strategy", "description": "Use interactive games"}],
-            }
-        }
-
-        # 执行检查
-        result = evaluator._check_memory_check(assertion, actual)
-
-        # 验证结果
-        assert result["passed"] is False
-        assert result["score"] == 0.0
-        assert result["actual_exists"] is True
-
-    def test_check_memory_check_not_exists_but_should(self, evaluator):
-        """检查记忆不存在但应该存在的情况"""
-        # 准备测试数据
-        assertion = EvalAssertion(
-            type=AssertionType.MEMORY_CHECK,
-            field="memory.profile",
-            expected={
-                "type": "profile",
-                "should_exist": True,
-            },
-            weight=1.0,
-        )
-
-        actual = {"memory": {}}
-
-        # 执行检查
-        result = evaluator._check_memory_check(assertion, actual)
-
-        # 验证结果
-        assert result["passed"] is False
-        assert result["score"] == 0.0
-        assert result["actual_exists"] is False
+    results = [asyncio.run(evaluator._check_assertion(assertion, actual)) for assertion in assertions]
+    assert all(result["passed"] for result in results)
 
 
-class TestCheckHallucinationCheck:
-    """测试 _check_hallucination_check 方法"""
-
-    def test_check_hallucination_check_found(self, evaluator):
-        """检测到幻觉的情况"""
-        # 准备测试数据
-        hallucination_keywords = ["fictional", "made-up", "imaginary"]
-        assertion = EvalAssertion(
-            type=AssertionType.MEMORY_CHECK,  # 使用 hallucination_check 类型需要在 AssertionType 中定义
-            field="response",
-            expected=hallucination_keywords,
-            weight=1.0,
-        )
-
-        actual = {"response": "The student used a fictional character named Alex to understand the concept."}
-
-        # 执行检查
-        result = evaluator._check_hallucination_check(assertion, actual)
-
-        # 验证结果
-        assert result["assertion_type"] == "memory_check"
-        assert result["field"] == "response"
-        assert result["hallucination_keywords"] == hallucination_keywords
-        assert "fictional" in result["found_keywords"]
-        assert result["has_hallucination"] is True
-        assert result["passed"] is False
-        assert result["score"] == 0.0
-
-    def test_check_hallucination_check_not_found(self, evaluator):
-        """没有检测到幻觉的情况"""
-        # 准备测试数据
-        hallucination_keywords = ["fictional", "made-up", "imaginary"]
-        assertion = EvalAssertion(
-            type=AssertionType.MEMORY_CHECK,
-            field="response",
-            expected=hallucination_keywords,
-            weight=1.0,
-        )
-
-        actual = {"response": "The student learned about photosynthesis in the classroom today."}
-
-        # 执行检查
-        result = evaluator._check_hallucination_check(assertion, actual)
-
-        # 验证结果
-        assert result["assertion_type"] == "memory_check"
-        assert result["field"] == "response"
-        assert result["hallucination_keywords"] == hallucination_keywords
-        assert result["found_keywords"] == []
-        assert result["has_hallucination"] is False
-        assert result["passed"] is True
-        assert result["score"] == 1.0
-
-    def test_check_hallucination_check_multiple_keywords(self, evaluator):
-        """检测到多个幻觉关键词的情况"""
-        # 准备测试数据
-        hallucination_keywords = ["fictional", "made-up", "imaginary"]
-        assertion = EvalAssertion(
-            type=AssertionType.MEMORY_CHECK,
-            field="response",
-            expected=hallucination_keywords,
-            weight=1.0,
-        )
-
-        actual = {"response": "The fictional and made-up scenario was used to teach the concept."}
-
-        # 执行检查
-        result = evaluator._check_hallucination_check(assertion, actual)
-
-        # 验证结果
-        assert len(result["found_keywords"]) == 2
-        assert "fictional" in result["found_keywords"]
-        assert "made-up" in result["found_keywords"]
-        assert result["has_hallucination"] is True
-        assert result["passed"] is False
-        assert result["score"] == 0.0
-
-    def test_check_hallucination_check_single_keyword_string(self, evaluator):
-        """单个关键词作为字符串的情况"""
-        # 准备测试数据
-        assertion = EvalAssertion(
-            type=AssertionType.MEMORY_CHECK,
-            field="response",
-            expected="fictional",  # 单个字符串而不是列表
-            weight=1.0,
-        )
-
-        actual = {"response": "This is a fictional scenario."}
-
-        # 执行检查
-        result = evaluator._check_hallucination_check(assertion, actual)
-
-        # 验证结果
-        assert result["hallucination_keywords"] == ["fictional"]
-        assert "fictional" in result["found_keywords"]
-        assert result["has_hallucination"] is True
-        assert result["passed"] is False
-        assert result["score"] == 0.0
+def test_contains_defaults_to_any_but_supports_all(evaluator: ConcreteEvaluator) -> None:
+    any_result = asyncio.run(evaluator._check_assertion(
+        EvalAssertion(type=AssertionType.CONTAINS, field="value", expected=["a", "z"]),
+        {"value": "abc"},
+    ))
+    all_result = asyncio.run(evaluator._check_assertion(
+        EvalAssertion(type=AssertionType.CONTAINS, field="value", expected={"all": ["a", "z"]}),
+        {"value": "abc"},
+    ))
+    assert any_result["passed"] is True
+    assert all_result["passed"] is False
 
 
-class TestCheckExtractionQuality:
-    """测试 _check_extraction_quality 方法"""
-
-    @pytest.mark.asyncio
-    async def test_check_extraction_quality_not_implemented(self, evaluator):
-        """检查提取质量未实现的情况"""
-        # 准备测试数据
-        assertion = EvalAssertion(
-            type=AssertionType.MEMORY_CHECK,
-            field="extraction",
-            expected={},
-            weight=1.0,
-        )
-
-        actual = {}
-
-        # 执行检查
-        result = await evaluator._check_extraction_quality(assertion, actual)
-
-        # 验证结果
-        assert result["passed"] is False
-        assert result["score"] == 0.0
-        assert "not implemented" in result["error"]
+def test_hallucination_check_can_compare_with_source(evaluator: ConcreteEvaluator) -> None:
+    assertion = EvalAssertion(
+        type=AssertionType.HALLUCINATION_CHECK,
+        field="metadata.subject",
+        expected={
+            "source_field": "input_message",
+            "allowed_values": [None, "", "未知"],
+        },
+    )
+    assert (
+        asyncio.run(evaluator._check_assertion(
+            assertion,
+            {"metadata": {"subject": "数学"}, "input_message": "设计数学课程"},
+        ))
+    )["passed"]
+    assert not (
+        asyncio.run(evaluator._check_assertion(
+            assertion,
+            {"metadata": {"subject": "物理"}, "input_message": "设计数学课程"},
+        ))
+    )["passed"]
 
 
-class TestGetNestedField:
-    """测试 _get_nested_field 方法"""
+def test_judge_failure_raises_instead_of_returning_half_score(
+    evaluator: ConcreteEvaluator,
+) -> None:
+    evaluator.rubric = {"quality": {"good": "relevant"}}
 
-    def test_get_nested_field_single_level(self, evaluator):
-        """获取单层字段"""
-        data = {"name": "Alice"}
-        result = evaluator._get_nested_field(data, "name")
-        assert result == "Alice"
+    class FailingJudge:
+        async def ainvoke(self, prompt):
+            raise RuntimeError("judge unavailable")
 
-    def test_get_nested_field_multiple_levels(self, evaluator):
-        """获取多层嵌套字段"""
-        data = {"user": {"profile": {"name": "Bob"}}}
-        result = evaluator._get_nested_field(data, "user.profile.name")
-        assert result == "Bob"
+    evaluator.judge_model = FailingJudge()
+    assertion = EvalAssertion(
+        type=AssertionType.RESPONSE_QUALITY,
+        field="response",
+        expected=True,
+        rubric="quality",
+    )
+    with pytest.raises(JudgeEvaluationError):
+        asyncio.run(evaluator._check_assertion(assertion, {"response": "answer"}))
 
-    def test_get_nested_field_not_found(self, evaluator):
-        """字段不存在的情况"""
-        data = {"user": {"name": "Charlie"}}
-        result = evaluator._get_nested_field(data, "user.age")
-        assert result is None
 
-    def test_get_nested_field_path_broken(self, evaluator):
-        """路径断裂的情况"""
-        data = {"user": "not_a_dict"}
-        result = evaluator._get_nested_field(data, "user.profile.name")
-        assert result is None
+def test_nested_field_returns_none_for_broken_path(evaluator: ConcreteEvaluator) -> None:
+    assert evaluator._get_nested_field({"user": "not-a-dict"}, "user.name") is None

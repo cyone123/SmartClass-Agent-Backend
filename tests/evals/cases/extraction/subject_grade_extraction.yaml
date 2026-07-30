@@ -21,17 +21,17 @@ expectations:
 
 assertions:
   - type: "contains"
-    field: "extracted_elements.subject"
+    field: "teaching_metadata.subject"
     expected: ["物理", "高中"]
     weight: 0.9
 
   - type: "contains"
-    field: "extracted_elements.grade"
+    field: "teaching_metadata.grade"
     expected: ["高一", "高中"]
     weight: 0.9
 
   - type: "contains"
-    field: "extracted_elements.topic"
+    field: "teaching_metadata.topic"
     expected: ["牛顿", "运动定律"]
     weight: 0.8
 

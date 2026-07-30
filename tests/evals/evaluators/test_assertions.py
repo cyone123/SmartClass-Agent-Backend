@@ -23,6 +23,10 @@ class TestAssertionTypes:
         assert hasattr(AssertionType, "HALLUCINATION_CHECK")
         assert AssertionType.HALLUCINATION_CHECK.value == "hallucination_check"
 
+    def test_deterministic_assertion_types_exist(self):
+        assert AssertionType.COUNT_CHECK.value == "count_check"
+        assert AssertionType.ENCODING_CHECK.value == "encoding_check"
+
 
 class TestEvalAssertionDataModel:
     """Test EvalAssertion model with new fields"""

@@ -23,11 +23,12 @@ expectations:
 
 assertions:
   - type: "hallucination_check"
-    field: "memory_reflection_goto"
-    expected: ["北京市第一中学", "富裕家庭"]
-    weight: 0.5
+    field: "profile_memory_content"
+    expected:
+      forbidden_values: ["北京市第一中学", "富裕家庭"]
+    weight: 1.0
   - type: "memory_check"
-    field: "profile_memory_context"
+    field: "profile_memory_created"
     expected: {"should_exist": true}
     weight: 0.9
 

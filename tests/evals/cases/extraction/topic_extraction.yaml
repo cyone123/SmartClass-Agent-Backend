@@ -22,12 +22,12 @@ expectations:
 
 assertions:
   - type: "contains"
-    field: "extracted_elements.topic"
+    field: "teaching_metadata.topic"
     expected: ["朝花夕拾", "从百草园到三味书屋"]
     weight: 0.95
 
   - type: "not_contains"
-    field: "extracted_elements.topic"
+    field: "teaching_metadata.topic"
     expected: ["随意", "虚构"]
     weight: 0.5
 

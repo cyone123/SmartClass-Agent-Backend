@@ -1,0 +1,15 @@
+schema_version: "1.0"
+max_error_count: 0
+required_categories:
+  intent_recognition:
+    min_pass_rate: 1.0
+  memory_retrieval:
+    min_pass_rate: 0.8
+  memory_write:
+    min_pass_rate: 0.8
+  memory_update:
+    min_pass_rate: 0.8
+  extraction_quality:
+    min_pass_rate: 0.8
+  context_compression:
+    min_pass_rate: 0.8

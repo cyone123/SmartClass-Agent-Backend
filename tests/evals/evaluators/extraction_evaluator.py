@@ -54,8 +54,8 @@ class ExtractionEvaluator(BaseEvaluator):
         # 获取 teaching_metadata 字段
         teaching_metadata = self._get_nested_field(actual, assertion.field) or {}
 
-        # 定义必需字段
-        required_fields = ["subject", "grade", "topic", "is_complete"]
+        # 定义必需字段。is_complete 是状态标记，不等同于用户已经提供的内容字段。
+        required_fields = ["subject", "grade", "topic"]
 
         # 检查哪些字段缺失
         missing_fields = [
@@ -67,14 +67,17 @@ class ExtractionEvaluator(BaseEvaluator):
         completeness_score = 1.0 - (len(missing_fields) / len(required_fields))
 
         # 检查是否标记为完整
-        is_marked_complete = teaching_metadata.get("is_complete", False)
+        is_marked_complete = bool(teaching_metadata.get("is_complete", False))
+        expected = assertion.expected if isinstance(assertion.expected, dict) else {}
+        expected_complete = expected.get("complete")
 
-        # 综合评分 = completeness_score * 0.7 + is_marked_complete * 0.3
-        score = completeness_score * 0.7 + (1.0 if is_marked_complete else 0.0) * 0.3
-
-        # 判断是否通过（默认最小分数为 0.7）
-        min_score = assertion.min_score or 0.7
-        passed = score >= min_score
+        if expected_complete is False:
+            score = 1.0 if not is_marked_complete else 0.0
+            passed = not is_marked_complete
+        else:
+            score = completeness_score * 0.7 + (1.0 if is_marked_complete else 0.0) * 0.3
+            min_score = assertion.min_score if assertion.min_score is not None else 0.7
+            passed = score >= min_score
 
         return {
             "assertion_type": assertion.type.value,
@@ -134,6 +137,7 @@ class ExtractionEvaluator(BaseEvaluator):
             actual_output = {
                 "teaching_metadata": result.get("teaching_metadata") or {},
                 "intent": result.get("intent"),
+                "input_message": case.input["message"],
                 "response": (result.get("messages", [])[-1].content if result.get("messages") else ""),
                 "rag_triggered": "rag_context" in result,
             }
@@ -162,6 +166,7 @@ class ExtractionEvaluator(BaseEvaluator):
                 assertion_results=assertion_results,
                 actual_output=actual_output,
                 execution_time=time.time() - start_time,
+                run_mode="model-eval",
                 timestamp=datetime.utcnow().isoformat(),
             )
 
@@ -175,5 +180,6 @@ class ExtractionEvaluator(BaseEvaluator):
                 actual_output={},
                 execution_time=time.time() - start_time,
                 error_message=str(e),
+                run_mode="model-eval",
                 timestamp=datetime.utcnow().isoformat(),
             )

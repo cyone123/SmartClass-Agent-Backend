@@ -1,5 +1,5 @@
 case_id: memory_update_001
-category: memory_write
+category: memory_update
 description: "评估系统是否正确更新现有的 profile 记忆而非重复创建"
 version: "1.0"
 
@@ -33,7 +33,7 @@ assertions:
     weight: 0.9
   - type: "contains"
     field: "profile_memory_content"
-    expected: ["互动式教学", "自主学习能力"]
+    expected: {"all": ["互动式教学", "自主学习能力"]}
     weight: 0.8
   - type: "count_check"
     field: "total_profile_memories"

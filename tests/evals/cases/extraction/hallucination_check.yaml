@@ -23,13 +23,17 @@ expectations:
 
 assertions:
   - type: "hallucination_check"
-    field: "extracted_elements.subject"
-    expected: ["虚构", "编造", "不清楚"]
+    field: "teaching_metadata.subject"
+    expected:
+      source_field: "input_message"
+      allowed_values: [null, "", "未知", "unknown", "不清楚"]
     weight: 0.8
 
   - type: "hallucination_check"
-    field: "extracted_elements.grade"
-    expected: ["虚构", "编造"]
+    field: "teaching_metadata.grade"
+    expected:
+      source_field: "input_message"
+      allowed_values: [null, "", "未知", "unknown", "不清楚"]
     weight: 0.8
 
 metadata:

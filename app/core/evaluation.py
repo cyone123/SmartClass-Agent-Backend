@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Literal, Optional
 
@@ -32,6 +32,8 @@ class AssertionType(str, Enum):
     ARTIFACT_VALID = "artifact_valid"
     SECURITY_CHECK = "security_check"
     PERFORMANCE_CHECK = "performance_check"
+    COUNT_CHECK = "count_check"
+    ENCODING_CHECK = "encoding_check"
 
 
 class EvalAssertion(BaseModel):
@@ -76,7 +78,31 @@ class EvalResult(BaseModel):
     execution_time: float
     error_message: Optional[str] = None
     trace_id: Optional[str] = None
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    run_mode: Literal["deterministic", "model-eval", "smoke"] = "model-eval"
+    model: dict[str, Any] = Field(default_factory=dict)
+    timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+
+class EvalCategoryMetrics(BaseModel):
+    """Unambiguous metrics for one evaluation category."""
+
+    count: int = 0
+    passed: int = 0
+    failed: int = 0
+    error: int = 0
+    pass_rate: float = 0.0
+    error_rate: float = 0.0
+    avg_score: float = 0.0
+
+
+class EvalRunManifest(BaseModel):
+    """Non-sensitive metadata required to reproduce an evaluation run."""
+
+    dataset_fingerprint: str = ""
+    git_commit: str = "unknown"
+    environment: dict[str, Any] = Field(default_factory=dict)
+    model: dict[str, Any] = Field(default_factory=dict)
+    commands: list[str] = Field(default_factory=list)
 
 
 class EvalReport(BaseModel):
@@ -89,6 +115,16 @@ class EvalReport(BaseModel):
     error: int
     avg_score: float
     category_scores: dict[str, float]
+    schema_version: str = "2.0"
+    run_mode: Literal["deterministic", "model-eval", "smoke", "legacy"] = "model-eval"
+    pass_rate: float = 0.0
+    error_rate: float = 0.0
+    category_metrics: dict[str, EvalCategoryMetrics] = Field(default_factory=dict)
+    dataset_fingerprint: str = ""
+    git_commit: str = "unknown"
+    model: dict[str, Any] = Field(default_factory=dict)
+    environment: dict[str, Any] = Field(default_factory=dict)
+    manifest: EvalRunManifest = Field(default_factory=EvalRunManifest)
     results: list[EvalResult]
     execution_time: float
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())

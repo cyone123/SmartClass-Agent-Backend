@@ -36,12 +36,12 @@ assertions:
     min_score: 0.9
 
   - type: "contains"
-    field: "extracted_elements.subject"
+    field: "teaching_metadata.subject"
     expected: "数学"
     weight: 0.8
 
   - type: "contains"
-    field: "extracted_elements.topic"
+    field: "teaching_metadata.topic"
     expected: ["三角函数", "单位圆"]
     weight: 0.8
 

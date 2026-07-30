@@ -24,7 +24,7 @@ expectations:
 
 assertions:
   - type: "memory_check"
-    field: "profile_memory_context"
+    field: "profile_memory_created"
     expected: {"should_exist": true}
     weight: 1.0
   - type: "encoding_check"
@@ -33,11 +33,11 @@ assertions:
     weight: 0.9
   - type: "contains"
     field: "profile_memory_content"
-    expected: ["AP Biology", "critical thinking"]
+    expected: {"all": ["AP Biology", "critical thinking"]}
     weight: 0.7
   - type: "not_contains"
     field: "profile_memory_content"
-    expected: ["\\x", "???", ""]
+    expected: ["\\x", "???"]
     weight: 0.8
 
 metadata:

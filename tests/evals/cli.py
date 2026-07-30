@@ -12,7 +12,8 @@ from pathlib import Path
 
 import click
 
-from .runners import EvalRunner
+from .reporting import BaselinePromotionError, default_benchmarks_root, promote_baseline
+from .suite_validation import format_audit, validate_suite
 
 # 修复 Windows 控制台编码问题
 if sys.platform == "win32":
@@ -32,6 +33,8 @@ def cli():
 @cli.command()
 def list_categories():
     """List all available evaluation categories"""
+    from .runners import EvalRunner
+
     base_dir = Path(__file__).parent
     cases_dir = base_dir / "cases"
     results_dir = base_dir / "results"
@@ -61,6 +64,37 @@ def list_categories():
     print()
 
 
+@cli.command("validate-suite")
+@click.option("--expected-count", type=int, default=None, help="Fail unless this many YAML cases are present")
+def validate_suite_command(expected_count):
+    """Strictly validate every evaluation case without invoking a model."""
+    cases_dir = Path(__file__).parent / "cases"
+    result = validate_suite(cases_dir, expected_count=expected_count)
+    print(format_audit(result))
+    if not result.valid:
+        raise click.ClickException("Evaluation suite validation failed")
+    print("[OK] Evaluation suite is valid")
+
+
+@cli.command("promote-baseline")
+@click.option("--report", "report_path", required=True, type=click.Path(exists=True, path_type=Path))
+@click.option("--baseline-id", required=True)
+@click.option("--benchmarks-root", type=click.Path(path_type=Path), default=None)
+@click.option("--replace", is_flag=True, help="Explicitly replace an existing baseline")
+def promote_baseline_command(report_path, baseline_id, benchmarks_root, replace):
+    """Promote one passing report into sanitized, commit-safe evidence."""
+    try:
+        target = promote_baseline(
+            report_path,
+            baseline_id=baseline_id,
+            benchmarks_root=benchmarks_root or default_benchmarks_root(),
+            replace=replace,
+        )
+    except BaselinePromotionError as exc:
+        raise click.ClickException(str(exc)) from exc
+    print(f"[SAVED] Baseline evidence: {target}")
+
+
 @cli.command()
 @click.option(
     "--category",
@@ -71,6 +105,8 @@ def list_categories():
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 def run(category, case_id, verbose):
     """Run evaluation suite"""
+    from .runners import EvalRunner
+
     base_dir = Path(__file__).parent
     cases_dir = base_dir / "cases"
     results_dir = base_dir / "results"

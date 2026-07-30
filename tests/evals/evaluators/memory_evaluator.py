@@ -8,6 +8,13 @@ from datetime import datetime
 
 from app.core.agent import create_agent_runtime
 from app.core.evaluation import EvalCase, EvalCaseStatus, EvalResult
+from app.core.memory import (
+    delete_memory_item,
+    experience_namespace,
+    profile_namespace,
+    put_memory_item,
+    search_memory_items,
+)
 from app.core.rag import create_rag_runtime
 from app.core.skills import create_skill_registry
 from app.core.speech import create_speech_runtime
@@ -69,6 +76,17 @@ class MemoryEvaluator(BaseEvaluator):
             # 准备配置
             thread_id = case.input.get("thread_id", f"eval_thread_{uuid.uuid4().hex[:8]}")
             user_id = case.input.get("user_id", "eval_user_001")
+            await self._seed_case_memories(runtime.memory_store, user_id, case.context or {})
+            before_profile = await search_memory_items(
+                runtime.memory_store,
+                profile_namespace(user_id),
+                limit=100,
+            )
+            before_experience = await search_memory_items(
+                runtime.memory_store,
+                experience_namespace(user_id),
+                limit=100,
+            )
 
             config = {
                 "configurable": {
@@ -90,18 +108,43 @@ class MemoryEvaluator(BaseEvaluator):
 
             # 运行 graph
             result = await graph.ainvoke(input_data, config=config)
+            after_profile = await search_memory_items(
+                runtime.memory_store,
+                profile_namespace(user_id),
+                limit=100,
+            )
+            after_experience = await search_memory_items(
+                runtime.memory_store,
+                experience_namespace(user_id),
+                limit=100,
+            )
 
             # 提取记忆相关输出
             profile_memory_context = result.get("profile_memory_context", "")
             experience_memory_context = result.get("experience_memory_context", "")
             loaded_experience_memories = result.get("loaded_experience_memories", [])
-            memory_operations = result.get("memory_operations", [])
+            memory_operations = self._memory_operations(
+                before_profile,
+                after_profile,
+                before_experience,
+                after_experience,
+            )
+            profile_content = "\n".join(
+                str(item.get("content") or item.get("summary") or "") for item in after_profile
+            )
 
             actual_output = {
                 "profile_memory_context": profile_memory_context,
                 "experience_memory_context": experience_memory_context,
                 "loaded_experience_memories": loaded_experience_memories,
                 "memory_operations": memory_operations,
+                "profile_memory_created": len(after_profile) > len(before_profile),
+                "experience_memory_created": len(after_experience) > len(before_experience),
+                "profile_memory_id": after_profile[0].get("id") if after_profile else None,
+                "profile_memory_content": profile_content,
+                "total_profile_memories": len(after_profile),
+                "memory_reflection_goto": result.get("memory_reflection_goto"),
+                "input_message": case.input["message"],
                 "response": (result.get("messages", [])[-1].content if result.get("messages") else ""),
                 # 用于隐私检查
                 "privacy_exposure": self._calculate_privacy_exposure(profile_memory_context, experience_memory_context),
@@ -131,6 +174,7 @@ class MemoryEvaluator(BaseEvaluator):
                 assertion_results=assertion_results,
                 actual_output=actual_output,
                 execution_time=time.time() - start_time,
+                run_mode="model-eval",
                 timestamp=datetime.utcnow().isoformat(),
             )
 
@@ -144,8 +188,75 @@ class MemoryEvaluator(BaseEvaluator):
                 actual_output={},
                 execution_time=time.time() - start_time,
                 error_message=str(e),
+                run_mode="model-eval",
                 timestamp=datetime.utcnow().isoformat(),
             )
+
+    async def _seed_case_memories(self, store, user_id: str, context: dict) -> None:
+        """Reset the eval-only namespace and seed declared fixture memories."""
+        for namespace in (profile_namespace(user_id), experience_namespace(user_id)):
+            for item in await search_memory_items(store, namespace, limit=100):
+                if item.get("id"):
+                    await delete_memory_item(store, namespace, str(item["id"]))
+
+        existing_profile = context.get("existing_profile_memory")
+        if isinstance(existing_profile, dict):
+            await put_memory_item(
+                store,
+                profile_namespace(user_id),
+                key=str(existing_profile.get("id") or "profile_seed"),
+                value={
+                    "title": existing_profile.get("title") or "教师画像",
+                    "summary": existing_profile.get("content") or "",
+                    "content": existing_profile.get("content") or "",
+                    "tags": ["eval-seed"],
+                    "kind": "profile",
+                },
+            )
+
+        for index, experience in enumerate(context.get("available_experiences") or []):
+            if not isinstance(experience, dict):
+                continue
+            content = str(
+                experience.get("content")
+                or experience.get("strategy")
+                or experience.get("summary")
+                or experience.get("topic")
+                or ""
+            )
+            await put_memory_item(
+                store,
+                experience_namespace(user_id),
+                key=str(experience.get("id") or f"experience_seed_{index}"),
+                value={
+                    "title": experience.get("topic") or "教学经验",
+                    "summary": content,
+                    "content": content,
+                    "tags": ["eval-seed"],
+                    "kind": "experience",
+                },
+            )
+
+    @staticmethod
+    def _memory_operations(
+        before_profile: list[dict],
+        after_profile: list[dict],
+        before_experience: list[dict],
+        after_experience: list[dict],
+    ) -> list[dict]:
+        operations: list[dict] = []
+        for kind, before, after in (
+            ("profile", before_profile, after_profile),
+            ("experience", before_experience, after_experience),
+        ):
+            before_by_id = {str(item.get("id")): item for item in before}
+            after_by_id = {str(item.get("id")): item for item in after}
+            for memory_id in sorted(after_by_id.keys() - before_by_id.keys()):
+                operations.append({"operation": "create", "kind": kind, "id": memory_id})
+            for memory_id in sorted(after_by_id.keys() & before_by_id.keys()):
+                if after_by_id[memory_id] != before_by_id[memory_id]:
+                    operations.append({"operation": "update", "kind": kind, "id": memory_id})
+        return operations
 
     def _calculate_privacy_exposure(self, profile_context: str, experience_context: str) -> float:
         """计算隐私暴露程度 (0.0-1.0)

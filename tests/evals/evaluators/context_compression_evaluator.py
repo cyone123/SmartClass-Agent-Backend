@@ -66,6 +66,8 @@ class ContextCompressionEvaluator(BaseEvaluator):
                 assertion_results=assertion_results,
                 actual_output=actual,
                 execution_time=time.time() - start_time,
+                run_mode="deterministic",
+                model={"provider": "fake", "model": FakeCompressionModel.model_name},
             )
         except Exception as exc:
             return EvalResult(
@@ -77,6 +79,8 @@ class ContextCompressionEvaluator(BaseEvaluator):
                 actual_output={},
                 execution_time=time.time() - start_time,
                 error_message=str(exc),
+                run_mode="deterministic",
+                model={"provider": "fake", "model": FakeCompressionModel.model_name},
             )
 
     async def _run_case(self, case: EvalCase) -> dict[str, Any]:

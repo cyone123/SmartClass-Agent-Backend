@@ -37,7 +37,7 @@ assertions:
     weight: 1.0
 
   - type: "not_contains"
-    field: "extracted_elements"
+    field: "teaching_metadata"
     expected: "subject"
     weight: 0.5
 

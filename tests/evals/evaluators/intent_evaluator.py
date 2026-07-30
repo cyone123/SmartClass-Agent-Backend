@@ -75,9 +75,10 @@ class IntentEvaluator(BaseEvaluator):
             result = await graph.ainvoke(input_data, config=config)
 
             # 提取关键输出
+            teaching_metadata = result.get("teaching_metadata") or {}
             actual_output = {
                 "intent": result.get("intent"),
-                "extracted_elements": result.get("teaching_metadata"),
+                "teaching_metadata": teaching_metadata,
                 "response": (result.get("messages", [])[-1].content if result.get("messages") else ""),
                 "rag_triggered": "rag_context" in result,
                 "memory_operations": [],
@@ -107,6 +108,7 @@ class IntentEvaluator(BaseEvaluator):
                 assertion_results=assertion_results,
                 actual_output=actual_output,
                 execution_time=time.time() - start_time,
+                run_mode="model-eval",
                 timestamp=datetime.utcnow().isoformat(),
             )
 
@@ -120,5 +122,6 @@ class IntentEvaluator(BaseEvaluator):
                 actual_output={},
                 execution_time=time.time() - start_time,
                 error_message=str(e),
+                run_mode="model-eval",
                 timestamp=datetime.utcnow().isoformat(),
             )

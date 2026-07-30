@@ -1,0 +1,26 @@
+{
+  "schema_version": "2.0",
+  "run_mode": "smoke",
+  "total_cases": 6,
+  "passed": 6,
+  "failed": 0,
+  "error": 0,
+  "pass_rate": 1.0,
+  "error_rate": 0.0,
+  "avg_score": 0.91,
+  "category_metrics": {
+    "intent_recognition": {"count": 1, "passed": 1, "failed": 0, "error": 0, "pass_rate": 1.0, "error_rate": 0.0, "avg_score": 0.9},
+    "memory_retrieval": {"count": 1, "passed": 1, "failed": 0, "error": 0, "pass_rate": 1.0, "error_rate": 0.0, "avg_score": 0.9},
+    "memory_write": {"count": 1, "passed": 1, "failed": 0, "error": 0, "pass_rate": 1.0, "error_rate": 0.0, "avg_score": 0.9},
+    "memory_update": {"count": 1, "passed": 1, "failed": 0, "error": 0, "pass_rate": 1.0, "error_rate": 0.0, "avg_score": 0.9},
+    "extraction_quality": {"count": 1, "passed": 1, "failed": 0, "error": 0, "pass_rate": 1.0, "error_rate": 0.0, "avg_score": 0.9},
+    "context_compression": {"count": 1, "passed": 1, "failed": 0, "error": 0, "pass_rate": 1.0, "error_rate": 0.0, "avg_score": 0.96}
+  },
+  "dataset_fingerprint": "sha256:fixture",
+  "git_commit": "fixture",
+  "model": {},
+  "environment": {"python": "fixture"},
+  "results": [],
+  "execution_time": 0.1,
+  "timestamp": "2026-07-30T00:00:00Z"
+}

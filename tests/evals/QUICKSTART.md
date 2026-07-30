@@ -1,153 +1,74 @@
 # SmartClass 评估系统快速开始
 
-## 🚀 快速开始
+以下命令均从 `backend` 目录执行。
 
-### 1. 查看演示
+## 1. 安装开发依赖
+
 ```bash
-cd backend
-python tests/evals/demo.py
+python -m pip install -r requirements-dev.txt
 ```
 
-### 2. 验证用例格式
+## 2. 先运行阶段 0 离线门禁
+
 ```bash
-python -m tests.evals.cli validate tests/evals/cases/intent/basic_chat.yaml
+python -m tests.evals.cli validate-suite --expected-count 24
+python -m pytest tests/evals -q
 ```
 
-### 3. 运行评估（需要数据库和模型服务）
+严格校验应显示 24 个用例：
+
+- `intent_recognition`: 5
+- `memory_retrieval`: 3
+- `memory_write`: 4
+- `memory_update`: 1
+- `extraction_quality`: 7
+- `context_compression`: 4
+
+这两步不需要真实模型 Key。它们验证用例发现、Schema、断言注册、字段契约、报告统计、回归门禁和证据脱敏。
+
+## 3. 查看或运行评估
+
 ```bash
-# 运行所有意图识别评估
-python -m tests.evals.cli run --category intent
-
-# 运行单个用例
-python -m tests.evals.cli run --case-id intent_basic_chat_001
-
-# 详细输出
-python -m tests.evals.cli run --category intent --verbose
-```
-
-## 📋 已实现的用例
-
-### 意图识别评估 (5个)
-
-| 用例ID | 描述 | 断言数 |
-|--------|------|--------|
-| intent_basic_chat_001 | 基础闲聊意图识别 | 2 |
-| intent_teaching_plan_001 | 教学规划意图识别 | 4 |
-| intent_artifact_revision_001 | 产物修改意图识别 | 1 |
-| intent_ambiguous_001 | 模糊请求处理 | 1 |
-| intent_mixed_001 | 混合意图识别 | 4 |
-
-## 🔧 断言类型
-
-- **route_match**: 精确路由匹配（如 intent == "teaching_plan"）
-- **contains**: 字段包含检查（如响应包含"数学"）
-- **not_contains**: 字段不包含检查（如不应提取教学要素）
-- **response_quality**: LLM评判响应质量（使用 rubric）
-
-## 📊 评估报告
-
-运行后会生成 JSON 格式的报告：
-```json
-{
-  "suite_id": "eval_1234567890",
-  "total_cases": 5,
-  "passed": 4,
-  "failed": 1,
-  "error": 0,
-  "avg_score": 0.85,
-  "category_scores": {
-    "intent_recognition": 0.85
-  },
-  "execution_time": 12.5,
-  "results": [...]
-}
-```
-
-## 🎯 评分规则
-
-- 每个断言有权重（weight）
-- 计算加权总分：Σ(断言分数 × 权重) / Σ(权重)
-- 权重 ≥ 0.5 的断言必须全部通过才算 PASSED
-
-## 📝 添加新用例
-
-1. 在 `tests/evals/cases/<category>/` 创建 YAML 文件
-2. 定义 input、context、expectations、assertions
-3. 运行验证：`python -m tests.evals.cli validate <file.yaml>`
-
-示例：
-```yaml
-case_id: intent_new_001
-category: intent_recognition
-description: "新的意图识别测试"
-version: "1.0"
-
-input:
-  user_id: "test_user"
-  plan_id: null
-  thread_id: "test_thread"
-  message: "测试消息"
-  attachments: []
-
-context:
-  user_profile:
-    role: "teacher"
-
-expectations:
-  intent: "normal_chat"
-
-assertions:
-  - type: "route_match"
-    field: "intent"
-    expected: "normal_chat"
-    weight: 1.0
-
-metadata:
-  author: "your_name"
-  created_at: "2026-06-11"
-  tags: ["intent", "test"]
-```
-
-## 🔍 调试技巧
-
-### 查看详细断言结果
-```bash
+python -m tests.evals.cli list-categories
+python -m tests.evals.cli run --category context_compression
+python -m tests.evals.cli run --category intent_recognition
 python -m tests.evals.cli run --case-id intent_basic_chat_001 --verbose
 ```
 
-### 检查用例格式
+除确定性用例外，`run` 会调用真实 LangGraph/模型链路，并可能需要数据库。请确认环境变量和依赖服务后再运行。
+
+## 4. 检查回归门禁
+
 ```bash
-python -m tests.evals.cli validate tests/evals/cases/intent/*.yaml
+python -m tests.evals.check_regression \
+  --report tests/evals/fixtures/reports/passing.json
 ```
 
-### 查看评估报告
+门禁依据分类 `pass_rate`，不使用 `avg_score` 代替通过率。缺少分类、存在运行错误、阈值下降或 legacy 报告都应失败。
+
+## 5. 晋升可提交基线
+
 ```bash
-# 报告保存在
-cat tests/evals/results/eval_*.json | jq .
+python -m tests.evals.cli promote-baseline \
+  --report tests/evals/fixtures/reports/passing.json \
+  --baseline-id stage0-local-check
 ```
 
-## ⚠️ 注意事项
+晋升结果只包含聚合数据，输出到 `docs/benchmarks/baselines/stage0-local-check/`。原始运行 JSON 继续留在被 Git 忽略的 `tests/evals/results/`。
 
-1. **需要服务运行**: 评估会实际调用 LangGraph，需要：
-   - PostgreSQL 数据库
-   - 模型 API 配置
-   - 相关环境变量
+## 6. 报告字段
 
-2. **Windows 编码**: 已处理控制台编码问题，使用 UTF-8
+Schema 2.0 报告应至少包含：
 
-3. **异步执行**: 评估器使用 async/await，会实际运行 Agent
+```text
+schema_version
+run_mode
+total_cases / passed / failed / error
+pass_rate / error_rate / avg_score
+category_metrics
+dataset_fingerprint
+git_commit
+model / environment / manifest
+```
 
-4. **结果保存**: 所有结果保存在 `tests/evals/results/`
-
-## 🚀 Phase 2 计划
-
-- [ ] 记忆检索与写入评估
-- [ ] 教学要素抽取评估
-- [ ] 建立回归测试集
-- [ ] 集成到 CI/CD
-
-## 📚 参考文档
-
-- [评估系统架构](./README.md)
-- [Phase 1 总结](./PHASE1_SUMMARY.md)
-- [CLAUDE.md 评估章节](../../../CLAUDE.md#7-下一阶段开发重点)
+`deterministic`、`smoke` 与 `model-eval` 不可混写为同一种证据。确定性 smoke 只证明评估系统与门禁可运行，不代表真实模型质量或时延。
