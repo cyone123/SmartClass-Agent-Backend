@@ -34,13 +34,15 @@ class EvalRunner:
         cases_dir: Path,
         results_dir: Path,
         *,
-        run_mode: Literal["deterministic", "model-eval", "smoke"] = "model-eval",
+        run_mode: Literal["deterministic", "model-eval", "smoke", "mixed"] = "model-eval",
         model: dict[str, Any] | None = None,
+        command_args: list[str] | None = None,
     ):
         self.cases_dir = cases_dir
         self.results_dir = results_dir
         self.run_mode = run_mode
-        self.model = sanitize_model_summary(model)
+        self.model = sanitize_model_summary(model) if model is not None else None
+        self.command_args = list(command_args or [])
         self.evaluators: dict[str, BaseEvaluator] = {
             "intent_recognition": IntentEvaluator(),
             "memory_retrieval": MemoryEvaluator(),
@@ -91,7 +93,7 @@ class EvalRunner:
         return build_run_manifest(
             cases_dir=self.cases_dir,
             model=self.model,
-            commands=["python -m tests.evals.cli run"],
+            commands=["python -m tests.evals.cli run" + "".join(f" {arg}" for arg in self.command_args)],
         )
 
     def _empty_report(self) -> EvalReport:
@@ -112,6 +114,8 @@ class EvalRunner:
             run_mode=self.run_mode,
             dataset_fingerprint=manifest.dataset_fingerprint,
             git_commit=manifest.git_commit,
+            repository_dirty=manifest.repository_dirty,
+            source_fingerprint=manifest.source_fingerprint,
             model=manifest.model,
             environment=manifest.environment,
             manifest=manifest,
@@ -139,10 +143,13 @@ class EvalRunner:
         category_metrics: dict[str, EvalCategoryMetrics] = {}
         for category, category_results in sorted(grouped.items()):
             count = len(category_results)
+            category_modes = {item.run_mode for item in category_results}
+            category_mode = next(iter(category_modes)) if len(category_modes) == 1 else "mixed"
             category_passed = sum(item.status == EvalCaseStatus.PASSED for item in category_results)
             category_failed = sum(item.status == EvalCaseStatus.FAILED for item in category_results)
             category_error = sum(item.status == EvalCaseStatus.ERROR for item in category_results)
             category_metrics[category] = EvalCategoryMetrics(
+                run_mode=category_mode,
                 count=count,
                 passed=category_passed,
                 failed=category_failed,
@@ -156,11 +163,7 @@ class EvalRunner:
 
         manifest = self._manifest()
         result_modes = {result.run_mode for result in results}
-        report_mode = (
-            next(iter(result_modes))
-            if len(result_modes) == 1 and self.run_mode == "model-eval"
-            else self.run_mode
-        )
+        report_mode = next(iter(result_modes)) if len(result_modes) == 1 else "mixed"
         return EvalReport(
             suite_id=f"eval_{int(time.time())}",
             total_cases=total,
@@ -179,6 +182,8 @@ class EvalRunner:
             run_mode=report_mode,
             dataset_fingerprint=manifest.dataset_fingerprint,
             git_commit=manifest.git_commit,
+            repository_dirty=manifest.repository_dirty,
+            source_fingerprint=manifest.source_fingerprint,
             model=manifest.model,
             environment=manifest.environment,
             manifest=manifest,

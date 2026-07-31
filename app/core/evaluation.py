@@ -86,6 +86,7 @@ class EvalResult(BaseModel):
 class EvalCategoryMetrics(BaseModel):
     """Unambiguous metrics for one evaluation category."""
 
+    run_mode: Literal["deterministic", "model-eval", "smoke", "mixed"] = "model-eval"
     count: int = 0
     passed: int = 0
     failed: int = 0
@@ -100,6 +101,8 @@ class EvalRunManifest(BaseModel):
 
     dataset_fingerprint: str = ""
     git_commit: str = "unknown"
+    repository_dirty: bool = False
+    source_fingerprint: str = ""
     environment: dict[str, Any] = Field(default_factory=dict)
     model: dict[str, Any] = Field(default_factory=dict)
     commands: list[str] = Field(default_factory=list)
@@ -116,12 +119,14 @@ class EvalReport(BaseModel):
     avg_score: float
     category_scores: dict[str, float]
     schema_version: str = "2.0"
-    run_mode: Literal["deterministic", "model-eval", "smoke", "legacy"] = "model-eval"
+    run_mode: Literal["deterministic", "model-eval", "smoke", "mixed", "legacy"] = "model-eval"
     pass_rate: float = 0.0
     error_rate: float = 0.0
     category_metrics: dict[str, EvalCategoryMetrics] = Field(default_factory=dict)
     dataset_fingerprint: str = ""
     git_commit: str = "unknown"
+    repository_dirty: bool = False
+    source_fingerprint: str = ""
     model: dict[str, Any] = Field(default_factory=dict)
     environment: dict[str, Any] = Field(default_factory=dict)
     manifest: EvalRunManifest = Field(default_factory=EvalRunManifest)

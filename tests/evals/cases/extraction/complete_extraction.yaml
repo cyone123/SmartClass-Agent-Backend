@@ -7,7 +7,7 @@ input:
   user_id: "eval_user_ext_001"
   plan_id: 11
   thread_id: "eval_thread_ext_001"
-  message: "我想为高二学生设计一节关于三角函数的数学课，课时 45 分钟，重点是学生理解单位圆上的三角函数定义，难点是 sin、cos、tan 之间的关系"
+  message: "我想为高二学生设计一节关于三角函数的数学课，课时 45 分钟，教学目标是学生能解释单位圆上的三角函数定义，重点是理解单位圆上的三角函数定义，难点是 sin、cos、tan 之间的关系"
   attachments: []
 
 context:

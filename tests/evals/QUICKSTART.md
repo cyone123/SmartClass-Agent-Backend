@@ -31,11 +31,13 @@ python -m pytest tests/evals -q
 ```bash
 python -m tests.evals.cli list-categories
 python -m tests.evals.cli run --category context_compression
-python -m tests.evals.cli run --category intent_recognition
-python -m tests.evals.cli run --case-id intent_basic_chat_001 --verbose
+python -m tests.evals.cli run --category intent_recognition --local-docker-db
+python -m tests.evals.cli run --case-id intent_basic_chat_001 --local-docker-db --verbose
 ```
 
 除确定性用例外，`run` 会调用真实 LangGraph/模型链路，并可能需要数据库。请确认环境变量和依赖服务后再运行。
+
+本地 Python 连接 Compose PostgreSQL 时使用 `--local-docker-db`。完整 24 用例报告属于 `mixed`：20 个模型用例加 4 个确定性用例，各分类的真实模式记录在 `category_metrics.<category>.run_mode`。
 
 ## 4. 检查回归门禁
 

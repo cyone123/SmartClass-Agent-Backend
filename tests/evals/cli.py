@@ -11,6 +11,7 @@ import asyncio
 from pathlib import Path
 
 import click
+from dotenv import dotenv_values
 
 from .reporting import BaselinePromotionError, default_benchmarks_root, promote_baseline
 from .suite_validation import format_audit, validate_suite
@@ -28,6 +29,23 @@ if sys.platform == "win32":
 def cli():
     """SmartClass Evaluation CLI"""
     pass
+
+
+def configure_local_docker_database(env_file: Path) -> None:
+    """Point a host-side eval process at the Compose PostgreSQL port."""
+    values = dotenv_values(env_file)
+    mapping = {
+        "DB_PORT": "POSTGRES_PORT",
+        "DB_USER": "POSTGRES_USER",
+        "DB_PASSWORD": "POSTGRES_PASSWORD",
+        "DB_NAME": "POSTGRES_DB",
+    }
+    missing = [source for source in mapping.values() if not values.get(source)]
+    if missing:
+        raise click.ClickException(f"Missing Docker database settings: {', '.join(missing)}")
+    os.environ["DB_HOST"] = "127.0.0.1"
+    for target, source in mapping.items():
+        os.environ[target] = str(values[source])
 
 
 @cli.command()
@@ -103,15 +121,31 @@ def promote_baseline_command(report_path, baseline_id, benchmarks_root, replace)
 )
 @click.option("--case-id", "-i", multiple=True, help="Specific case IDs")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
-def run(category, case_id, verbose):
+@click.option(
+    "--local-docker-db",
+    is_flag=True,
+    help="Use PostgreSQL credentials from the repository .env.docker via 127.0.0.1",
+)
+def run(category, case_id, verbose, local_docker_db):
     """Run evaluation suite"""
+    if local_docker_db:
+        configure_local_docker_database(Path(__file__).resolve().parents[3] / ".env.docker")
+
     from .runners import EvalRunner
 
     base_dir = Path(__file__).parent
     cases_dir = base_dir / "cases"
     results_dir = base_dir / "results"
 
-    runner = EvalRunner(cases_dir, results_dir)
+    command_args = []
+    if category:
+        command_args.extend(["--category", category])
+    for selected_case_id in case_id:
+        command_args.extend(["--case-id", selected_case_id])
+    if local_docker_db:
+        command_args.append("--local-docker-db")
+
+    runner = EvalRunner(cases_dir, results_dir, command_args=command_args)
     report = asyncio.run(runner.run_suite(category=category, case_ids=list(case_id) if case_id else None))
 
     print(f"\n{'=' * 60}")
@@ -141,6 +175,8 @@ def run(category, case_id, verbose):
             print(f"    Score: {result.score:.3f}")
             if result.error_message:
                 print(f"    Error: {result.error_message}")
+    if report.error:
+        raise click.ClickException(f"Evaluation completed with {report.error} runtime error(s)")
 
 
 @cli.command()

@@ -136,6 +136,41 @@ def test_metadata_structer_node_falls_back_when_fast_model_fails(monkeypatch) ->
     assert len(fallback_runnable.calls) == 1
 
 
+def test_metadata_structer_node_falls_back_when_fast_model_returns_empty(monkeypatch) -> None:
+    fast_runnable = FakeRunnable(response={})
+    fallback_runnable = FakeRunnable(
+        response={
+            "subject": "语文",
+            "grade": "初中",
+            "topic": "从百草园到三味书屋",
+            "course_duration": None,
+            "core_points": [],
+            "key_points": [],
+            "difficult_points": [],
+            "teaching_objectives": None,
+            "is_complete": False,
+        }
+    )
+    monkeypatch.setattr(graph_module, "metadata_extractor", fast_runnable)
+    monkeypatch.setattr(graph_module, "metadata_extractor_fallback", fallback_runnable)
+    monkeypatch.setattr(graph_module, "structured_fast_llm", FakeModel("fast-model", "https://fast.example.com/v1"))
+    monkeypatch.setattr(
+        graph_module, "structured_output_llm", FakeModel("fallback-model", "https://fallback.example.com/v1")
+    )
+    monkeypatch.setattr(graph_module, "is_structured_fallback_enabled", lambda: True)
+
+    result = graph_module.metadata_structer_node(
+        {
+            "messages": [HumanMessage(content="设计《从百草园到三味书屋》课程")],
+            "teaching_metadata": None,
+        }
+    )
+
+    assert result["teaching_metadata"]["topic"] == "从百草园到三味书屋"
+    assert len(fast_runnable.calls) == 1
+    assert len(fallback_runnable.calls) == 1
+
+
 def test_intent_router_node_falls_back_to_reliable_model(monkeypatch) -> None:
     fast_router = FakeRunnable(error=RuntimeError("fast router parse failure"))
     fallback_router = FakeRunnable(

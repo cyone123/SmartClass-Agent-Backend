@@ -804,12 +804,12 @@ def intent_router_node(
 
 def route_decision(state: TeachingAssistantState):
     if state.get("intent") == "normal_chat":
-        return "normal_chat_node"
+        return "normal_chat_memory_retrieval_node"
     if state.get("intent") == "teaching_plan":
-        return "metadata_structer_node"
+        return "teaching_plan_memory_retrieval_node"
     if state.get("intent") == "artifact_revision":
         return "artifact_revision_memory_retrieval_node"
-    return "normal_chat_node"
+    return "normal_chat_memory_retrieval_node"
 
 
 def _runtime_user_id(runtime: Runtime[MemoryRuntimeContext] | None) -> str | None:
@@ -994,6 +994,20 @@ def metadata_structer_node(
             fallback_model=structured_output_llm,
             config=config,
         )
+        if (
+            not response
+            and is_structured_fallback_enabled()
+            and metadata_extractor_fallback is not None
+            and structured_output_llm is not None
+        ):
+            response = _invoke_structured_runnable(
+                schema_name="TeachingMetadata",
+                runnable=metadata_extractor_fallback,
+                model=structured_output_llm,
+                messages=build_metadata_extraction_messages(state),
+                is_fallback=True,
+                config=config,
+            )
         if reporter:
             reporter.emit(
                 "metadata_structuring",
@@ -1500,8 +1514,8 @@ def build_agent_graph(
         "intent_router_node",
         route_decision,
         {
-            "normal_chat_node": "normal_chat_node",
-            "metadata_structer_node": "metadata_structer_node",
+            "normal_chat_memory_retrieval_node": "normal_chat_memory_retrieval_node",
+            "teaching_plan_memory_retrieval_node": "teaching_plan_memory_retrieval_node",
             "artifact_revision_memory_retrieval_node": "artifact_revision_memory_retrieval_node",
         },
     )

@@ -50,8 +50,7 @@ class IntentEvaluator(BaseEvaluator):
             graph = runtime.streaming_graph
 
             # 准备配置
-            thread_id = case.input["thread_id"]
-            user_id = case.input["user_id"]
+            thread_id, user_id = self._isolated_runtime_ids(case, run_id)
 
             config = {
                 "configurable": {
@@ -60,19 +59,14 @@ class IntentEvaluator(BaseEvaluator):
                 }
             }
 
-            # 准备输入
-            from langchain_core.messages import HumanMessage
-
-            input_data = {
-                "messages": [HumanMessage(content=case.input["message"])],
-            }
-
-            # 如果有 plan_id，添加到状态
-            if case.input.get("plan_id"):
-                input_data["plan_id"] = case.input["plan_id"]
+            input_data = self._build_graph_input(case)
 
             # 运行 graph
-            result = await graph.ainvoke(input_data, config=config)
+            result = await graph.ainvoke(
+                input_data,
+                config=config,
+                context={"user_id": user_id},
+            )
 
             # 提取关键输出
             teaching_metadata = result.get("teaching_metadata") or {}

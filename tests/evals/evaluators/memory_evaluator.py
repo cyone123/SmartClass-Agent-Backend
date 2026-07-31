@@ -74,8 +74,7 @@ class MemoryEvaluator(BaseEvaluator):
             graph = runtime.streaming_graph
 
             # 准备配置
-            thread_id = case.input.get("thread_id", f"eval_thread_{uuid.uuid4().hex[:8]}")
-            user_id = case.input.get("user_id", "eval_user_001")
+            thread_id, user_id = self._isolated_runtime_ids(case, run_id)
             await self._seed_case_memories(runtime.memory_store, user_id, case.context or {})
             before_profile = await search_memory_items(
                 runtime.memory_store,
@@ -95,19 +94,14 @@ class MemoryEvaluator(BaseEvaluator):
                 }
             }
 
-            # 准备输入
-            from langchain_core.messages import HumanMessage
-
-            input_data = {
-                "messages": [HumanMessage(content=case.input["message"])],
-            }
-
-            # 如果有 plan_id，添加到状态
-            if case.input.get("plan_id"):
-                input_data["plan_id"] = case.input["plan_id"]
+            input_data = self._build_graph_input(case)
 
             # 运行 graph
-            result = await graph.ainvoke(input_data, config=config)
+            result = await graph.ainvoke(
+                input_data,
+                config=config,
+                context={"user_id": user_id},
+            )
             after_profile = await search_memory_items(
                 runtime.memory_store,
                 profile_namespace(user_id),

@@ -26,7 +26,7 @@ def default_benchmarks_root() -> Path:
 def _safe_category_metrics(value: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(value, dict):
         return {}
-    allowed = ("count", "passed", "failed", "error", "pass_rate", "error_rate", "avg_score")
+    allowed = ("run_mode", "count", "passed", "failed", "error", "pass_rate", "error_rate", "avg_score")
     return {
         str(category): {
             key: metrics[key]
@@ -55,10 +55,12 @@ def build_sanitized_summary(report: dict[str, Any]) -> dict[str, Any]:
         "category_metrics": _safe_category_metrics(report.get("category_metrics")),
         "dataset_fingerprint": report.get("dataset_fingerprint", ""),
         "git_commit": report.get("git_commit", "unknown"),
+        "repository_dirty": bool(report.get("repository_dirty", False)),
+        "source_fingerprint": report.get("source_fingerprint", ""),
         "model": {
             key: value
             for key, value in (report.get("model") or {}).items()
-            if key in {"provider", "model", "temperature", "top_p", "max_tokens", "judge_model"}
+            if key in {"provider", "model", "models", "temperature", "top_p", "max_tokens", "judge_model"}
         },
         "environment": safe_environment,
         "execution_time": float(report.get("execution_time", 0.0)),
@@ -80,6 +82,8 @@ def build_manifest(
         "source_report_name": source_report.name,
         "run_mode": report.get("run_mode"),
         "git_commit": report.get("git_commit", "unknown"),
+        "repository_dirty": bool(report.get("repository_dirty", False)),
+        "source_fingerprint": report.get("source_fingerprint", ""),
         "dataset_fingerprint": report.get("dataset_fingerprint", ""),
         "commands": list(report_manifest.get("commands") or []),
         "sample_size": int(report.get("total_cases", 0)),
@@ -91,6 +95,7 @@ def build_manifest(
         "limitations": [
             "This evidence contains aggregate metrics only.",
             "Deterministic or smoke results do not represent live-model latency or quality.",
+            "Category run modes must be used to distinguish deterministic and model-backed evidence.",
         ],
         "replaced_existing_baseline": replaced,
     }
@@ -102,6 +107,8 @@ def render_markdown_report(summary: dict[str, Any], manifest: dict[str, Any]) ->
         "",
         f"- Run mode: `{summary.get('run_mode')}`",
         f"- Git commit: `{summary.get('git_commit')}`",
+        f"- Repository dirty: `{summary.get('repository_dirty')}`",
+        f"- Source fingerprint: `{summary.get('source_fingerprint')}`",
         f"- Dataset: `{summary.get('dataset_fingerprint')}`",
         f"- Sample size: {summary.get('total_cases', 0)}",
         f"- Pass rate: {summary.get('pass_rate', 0.0):.2%}",
@@ -110,12 +117,13 @@ def render_markdown_report(summary: dict[str, Any], manifest: dict[str, Any]) ->
         "",
         "## Category metrics",
         "",
-        "| Category | Cases | Passed | Failed | Error | Pass rate | Avg score |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Category | Mode | Cases | Passed | Failed | Error | Pass rate | Avg score |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for category, metrics in summary.get("category_metrics", {}).items():
         lines.append(
-            f"| {category} | {metrics.get('count', 0)} | {metrics.get('passed', 0)} | "
+            f"| {category} | {metrics.get('run_mode', 'unknown')} | {metrics.get('count', 0)} | "
+            f"{metrics.get('passed', 0)} | "
             f"{metrics.get('failed', 0)} | {metrics.get('error', 0)} | "
             f"{metrics.get('pass_rate', 0.0):.2%} | {metrics.get('avg_score', 0.0):.3f} |"
         )

@@ -23,7 +23,13 @@ def _case(case_id: str, category: str) -> EvalCase:
     )
 
 
-def _result(case_id: str, status: EvalCaseStatus, score: float) -> EvalResult:
+def _result(
+    case_id: str,
+    status: EvalCaseStatus,
+    score: float,
+    *,
+    run_mode: str = "smoke",
+) -> EvalResult:
     return EvalResult(
         case_id=case_id,
         run_id=f"run-{case_id}",
@@ -32,7 +38,7 @@ def _result(case_id: str, status: EvalCaseStatus, score: float) -> EvalResult:
         assertion_results=[],
         actual_output={},
         execution_time=0.1,
-        run_mode="smoke",
+        run_mode=run_mode,
     )
 
 
@@ -87,3 +93,33 @@ def test_report_counts_errors_independently(tmp_path: Path) -> None:
     assert report.error == 1
     assert report.error_rate == 1.0
     assert report.category_metrics["memory_retrieval"].error == 1
+
+
+def test_report_marks_mixed_execution_modes_without_conflating_categories(tmp_path: Path) -> None:
+    runner = EvalRunner(tmp_path / "cases", tmp_path / "results")
+    cases = [
+        _case("model-case", "intent_recognition"),
+        _case("deterministic-case", "context_compression"),
+    ]
+    report = runner._generate_report(
+        [
+            _result(
+                "model-case",
+                EvalCaseStatus.PASSED,
+                1.0,
+                run_mode="model-eval",
+            ),
+            _result(
+                "deterministic-case",
+                EvalCaseStatus.PASSED,
+                1.0,
+                run_mode="deterministic",
+            ),
+        ],
+        0.2,
+        cases,
+    )
+
+    assert report.run_mode == "mixed"
+    assert report.category_metrics["intent_recognition"].run_mode == "model-eval"
+    assert report.category_metrics["context_compression"].run_mode == "deterministic"

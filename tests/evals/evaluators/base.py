@@ -74,6 +74,53 @@ class BaseEvaluator(ABC):
             return await result
         return result
 
+    @staticmethod
+    def _isolated_runtime_ids(case: EvalCase, run_id: str) -> tuple[str, str]:
+        """Prevent persistent checkpointer and memory state leaking between eval runs."""
+        original_thread = str(case.input.get("thread_id") or "eval_thread")
+        original_user = str(case.input.get("user_id") or "eval_user")
+        suffix = run_id.removeprefix("eval_")
+        return f"{original_thread}__{suffix}", f"{original_user}__{suffix}"
+
+    @staticmethod
+    def _build_graph_input(case: EvalCase) -> dict[str, Any]:
+        """Translate declared YAML context into the graph's stable input fields."""
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+        messages = []
+        message_types = {
+            "assistant": AIMessage,
+            "ai": AIMessage,
+            "user": HumanMessage,
+            "human": HumanMessage,
+            "system": SystemMessage,
+        }
+        for item in (case.context or {}).get("chat_history") or []:
+            if not isinstance(item, dict):
+                continue
+            message_type = message_types.get(str(item.get("role") or "").casefold())
+            content = str(item.get("content") or "")
+            if message_type is not None and content:
+                messages.append(message_type(content=content))
+        messages.append(HumanMessage(content=str(case.input["message"])))
+
+        input_data: dict[str, Any] = {"messages": messages}
+        if case.input.get("plan_id") is not None:
+            input_data["plan_id"] = case.input["plan_id"]
+
+        available_artifacts = (case.context or {}).get("available_artifacts") or []
+        if available_artifacts:
+            input_data["artifact_catalog"] = [
+                {
+                    **artifact,
+                    "id": artifact.get("artifact_id") or artifact.get("id"),
+                    "type": artifact.get("artifact_type") or artifact.get("type"),
+                }
+                for artifact in available_artifacts
+                if isinstance(artifact, dict)
+            ]
+        return input_data
+
     def _base_result(self, assertion: EvalAssertion) -> AssertionResult:
         return {
             "assertion_type": assertion.type.value,
@@ -113,8 +160,13 @@ class BaseEvaluator(ABC):
 
     def _check_contains(self, assertion: EvalAssertion, actual: dict[str, Any]) -> AssertionResult:
         field_value = self._stringify(self._get_nested_field(actual, assertion.field))
+        normalized_field_value = field_value.casefold()
         mode, expected_values = self._contains_expectations(assertion.expected)
-        matched = [value for value in expected_values if self._stringify(value) in field_value]
+        matched = [
+            value
+            for value in expected_values
+            if self._stringify(value).casefold() in normalized_field_value
+        ]
         passed = len(matched) == len(expected_values) if mode == "all" else bool(matched)
         score = len(matched) / len(expected_values) if expected_values else 0.0
         return {
@@ -128,9 +180,14 @@ class BaseEvaluator(ABC):
 
     def _check_not_contains(self, assertion: EvalAssertion, actual: dict[str, Any]) -> AssertionResult:
         field_value = self._stringify(self._get_nested_field(actual, assertion.field))
+        normalized_field_value = field_value.casefold()
         expected_values = assertion.expected if isinstance(assertion.expected, list) else [assertion.expected]
         expected_values = [value for value in expected_values if self._stringify(value)]
-        found = [value for value in expected_values if self._stringify(value) in field_value]
+        found = [
+            value
+            for value in expected_values
+            if self._stringify(value).casefold() in normalized_field_value
+        ]
         passed = not found
         return {
             **self._base_result(assertion),

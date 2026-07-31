@@ -40,10 +40,12 @@ python -m pytest tests/evals -q
 
 ```bash
 python -m tests.evals.cli list-categories
-python -m tests.evals.cli run --category intent_recognition
-python -m tests.evals.cli run --case-id intent_basic_chat_001 --verbose
-python -m tests.evals.cli run
+python -m tests.evals.cli run --category intent_recognition --local-docker-db
+python -m tests.evals.cli run --case-id intent_basic_chat_001 --local-docker-db --verbose
+python -m tests.evals.cli run --local-docker-db
 ```
+
+`--local-docker-db` 用于“Python 在宿主机、PostgreSQL 在本仓库 Compose 中”的运行方式。它从根目录 `.env.docker` 加载数据库账号，并强制通过 `127.0.0.1` 连接，不会输出密码。容器内运行时不要使用该参数。
 
 原始报告写入 `tests/evals/results/`，该目录中的运行结果默认被 Git 忽略。
 
@@ -51,12 +53,16 @@ python -m tests.evals.cli run
 
 当前报告 `schema_version` 为 `2.0`，核心字段包括：
 
-- `run_mode`：`deterministic`、`smoke` 或 `model-eval`；
+- `run_mode`：`deterministic`、`smoke`、`model-eval` 或 `mixed`；
 - `total_cases`、`passed`、`failed`、`error`；
 - `pass_rate` 与 `error_rate`；
 - `avg_score`，与通过率分开统计；
 - `category_metrics`，保存每个 category 的样本量、通过率、错误率和平均分；
-- `dataset_fingerprint`、`git_commit`、非敏感模型摘要和运行环境 manifest。
+- `dataset_fingerprint`、`git_commit`、`repository_dirty`、`source_fingerprint`、非敏感模型角色摘要和运行环境 manifest。未提交改动也会进入源码 SHA-256 指纹，避免仅凭 HEAD 错认实验版本。
+
+完整 suite 同时包含 20 个模型用例和 4 个确定性上下文压缩用例，因此报告必须标记为 `mixed`，并在每个 `category_metrics.*.run_mode` 中保留真实运行模式，不能把确定性结果包装成模型效果。
+
+如果任一 case 发生运行时 `ERROR`，CLI 会在保存原始报告后返回非零退出码。
 
 旧版 JSON 可被读取用于排查，但不能通过回归门禁，也不能直接晋升为新基线。
 

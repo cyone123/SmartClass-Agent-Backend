@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from typing import Any, TypedDict
 from uuid import uuid4
@@ -24,6 +25,28 @@ PROFILE_MEMORY_LIMIT = 100
 EXPERIENCE_SUMMARY_LIMIT = 100
 EXPERIENCE_SELECTION_LIMIT = 3
 MEMORY_CONTEXT_MAX_CHARS = 6000
+PROFILE_MEMORY_SIGNAL_PATTERNS = (
+    r"请记住",
+    r"记住",
+    r"我最喜欢",
+    r"我喜欢",
+    r"我偏好",
+    r"我习惯",
+    r"我通常",
+    r"我经常",
+    r"我倾向",
+    r"我更偏向",
+    r"我重视",
+    r"我强调",
+    r"我使用",
+    r"我用",
+    r"我采用",
+    r"我教授",
+    r"我是.{0,20}(?:老师|教师)",
+    r"\bi (?:prefer|teach|use|usually|often)\b",
+    r"\bremember (?:that )?i\b",
+    r"\bmy teaching\b",
+)
 
 
 class MemoryRuntimeContext(TypedDict, total=False):
@@ -340,6 +363,28 @@ def experience_summaries(memories: list[dict[str, Any]]) -> list[MemorySearchSum
     return summaries
 
 
+def exact_title_experience_ids(
+    summaries: list[MemorySearchSummary],
+    conversation_text: str,
+) -> list[str]:
+    """Select unambiguous exact title matches before asking a model."""
+    normalized_conversation = conversation_text.casefold()
+    generic_titles = {"教学经验", "reusable experience", "experience", "untitled memory"}
+    selected: list[str] = []
+    for summary in summaries:
+        title = str(summary.get("title") or "").strip()
+        normalized_title = title.casefold()
+        if (
+            len(normalized_title) >= 3
+            and normalized_title not in generic_titles
+            and normalized_title in normalized_conversation
+        ):
+            selected.append(str(summary["id"]))
+        if len(selected) >= EXPERIENCE_SELECTION_LIMIT:
+            break
+    return selected
+
+
 def format_experience_memory_context(memories: list[dict[str, Any]]) -> str:
     if not memories:
         return ""
@@ -396,6 +441,8 @@ async def choose_relevant_experience_memories(
     if not summaries:
         return "", []
 
+    conversation_text = visible_conversation_text(list(state.get("messages", []) or []), limit=8)
+    selected_ids = exact_title_experience_ids(summaries, conversation_text)
     prompt = [
         SystemMessage(
             content=(
@@ -407,7 +454,7 @@ async def choose_relevant_experience_memories(
         HumanMessage(
             content=(
                 "Current conversation:\n"
-                f"{visible_conversation_text(list(state.get('messages', []) or []), limit=8)}\n\n"
+                f"{conversation_text}\n\n"
                 "Available memory summaries JSON:\n"
                 f"{json.dumps(summaries, ensure_ascii=False)}"
             )
@@ -415,39 +462,48 @@ async def choose_relevant_experience_memories(
     ]
     context = run_context or RunContext(run_id="memory", user_id=user_id, agent_name="memory")
     sink = observation_sink or get_observation_sink()
-    try:
-        selection_message = await observe_llm_call(
-            "llm.call",
-            lambda: experience_selector.ainvoke(prompt),
-            context=context.with_agent("memory"),
-            sink=sink,
-            model=experience_selector,
-            messages=prompt,
-            fields={"node": "experience_memory_selection_node"},
-        )
-    except Exception as exc:
+    if selected_ids:
         log_observation(
-            "memory.experience_selection.skipped",
+            "memory.experience_selection.exact_title",
             context=context.with_agent("memory"),
             sink=sink,
-            status="failed",
-            fields={
-                "error_category": "memory_error",
-                "error_type": exc.__class__.__name__,
-                "error_message": str(exc),
-            },
+            status="success",
+            fields={"selected_count": len(selected_ids)},
         )
-        return "", []
-    tool_call = _first_tool_call(selection_message, {"select_experience_memories"})
-    if tool_call is None:
-        return "", []
-    raw_ids = tool_call["args"].get("memory_ids") or []
-    if isinstance(raw_ids, str):
-        raw_ids = [raw_ids]
+    else:
+        try:
+            selection_message = await observe_llm_call(
+                "llm.call",
+                lambda: experience_selector.ainvoke(prompt),
+                context=context.with_agent("memory"),
+                sink=sink,
+                model=experience_selector,
+                messages=prompt,
+                fields={"node": "experience_memory_selection_node"},
+            )
+        except Exception as exc:
+            log_observation(
+                "memory.experience_selection.skipped",
+                context=context.with_agent("memory"),
+                sink=sink,
+                status="failed",
+                fields={
+                    "error_category": "memory_error",
+                    "error_type": exc.__class__.__name__,
+                    "error_message": str(exc),
+                },
+            )
+            return "", []
+        tool_call = _first_tool_call(selection_message, {"select_experience_memories"})
+        if tool_call is None:
+            return "", []
+        raw_ids = tool_call["args"].get("memory_ids") or []
+        if isinstance(raw_ids, str):
+            raw_ids = [raw_ids]
 
-    selected_ids = [memory_id for memory_id in dict.fromkeys(str(item) for item in raw_ids) if memory_id]
-    if not selected_ids:
-        return "", []
+        selected_ids = [memory_id for memory_id in dict.fromkeys(str(item) for item in raw_ids) if memory_id]
+        if not selected_ids:
+            return "", []
 
     namespace = experience_namespace(user_id)
     selected: list[dict[str, Any]] = []
@@ -474,6 +530,16 @@ def _existing_memory_prompt(memories: list[dict[str, Any]]) -> str:
     return json.dumps(compact, ensure_ascii=False)
 
 
+def should_reflect_profile_memory(state: dict[str, Any]) -> bool:
+    """Conservatively require an explicit stable-profile signal before model reflection."""
+    user_text = "\n".join(
+        str(message.content)
+        for message in list(state.get("messages", []) or [])[-8:]
+        if isinstance(message, HumanMessage)
+    ).casefold()
+    return any(re.search(pattern, user_text, flags=re.IGNORECASE) for pattern in PROFILE_MEMORY_SIGNAL_PATTERNS)
+
+
 async def reflect_profile_memory(
     *,
     store: BaseStore | None,
@@ -484,6 +550,15 @@ async def reflect_profile_memory(
 ) -> dict[str, Any] | None:
     if store is None:
         return None
+    if not should_reflect_profile_memory(state):
+        log_observation(
+            "memory.profile_reflection.skipped",
+            context=(run_context or RunContext(run_id="memory", user_id=user_id, agent_name="memory")),
+            sink=observation_sink or get_observation_sink(),
+            status="success",
+            fields={"reason": "no_stable_profile_signal"},
+        )
+        return None
     namespace = profile_namespace(user_id)
     existing = await search_memory_items(store, namespace, limit=PROFILE_MEMORY_LIMIT)
     prompt = [
@@ -492,6 +567,9 @@ async def reflect_profile_memory(
                 "你负责从对话中提取用户画像、用户偏好或用户明确要求记住的内容，并保存为长期记忆。"
                 "仅保存稳定的用户偏好、明确要求记住的某项内容、教学风格偏好、重复出现的约束条件，或与未来教学工作相关的用户画像信息。"
                 "除非用户明确要求记住，否则不要保存临时的课程内容信息。"
+                "不要保存学校全名、住址、联系方式、证件号、健康信息、家庭收入或社会经济背景；"
+                "只保留完成未来教学任务真正需要的最小化摘要。"
+                "对用户明确使用的课程名、教学法和专业术语，保留原始语言和大小写。"
                 "如果不应写入任何长期记忆，则不要调用任何工具。"
                 "当新信息替换或完善了已有记忆时，使用 existing_id 调用 `update_memory`；"
                 "否则调用 `create_memory`。"
@@ -632,7 +710,7 @@ async def apply_memory_tool_call(
     if tool_call is None:
         return None
     args = tool_call["args"]
-    content = str(args.get("content") or args.get("summary") or "").strip()
+    content = sanitize_memory_text(str(args.get("content") or args.get("summary") or ""))
     if not content:
         return None
     key = str(args.get("existing_id") or "").strip() if tool_call["name"] == "update_memory" else None
@@ -640,11 +718,29 @@ async def apply_memory_tool_call(
         key = None
     value: MemoryItemPayload = {
         "kind": kind,
-        "title": str(args.get("title") or "Memory").strip(),
-        "summary": str(args.get("summary") or content[:240]).strip(),
+        "title": sanitize_memory_text(str(args.get("title") or "Memory")),
+        "summary": sanitize_memory_text(str(args.get("summary") or content[:240])),
         "content": content,
-        "tags": _normalize_tags(args.get("tags")),
+        "tags": [sanitize_memory_text(tag) for tag in _normalize_tags(args.get("tags"))],
         "source_thread_id": source_thread_id,
         "source_plan_id": source_plan_id,
     }
     return await put_memory_item(store, namespace, value=value, key=key)
+
+
+def sanitize_memory_text(value: str) -> str:
+    """Minimize common direct identifiers and sensitive socioeconomic details."""
+    sanitized = value.strip()
+    replacements = (
+        (r"(?<!\d)1[3-9]\d{9}(?!\d)", "[已移除手机号]"),
+        (r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[已移除邮箱]"),
+        (r"(?<!\d)\d{17}[\dXx](?!\d)", "[已移除证件号]"),
+        (r"[\u4e00-\u9fff]{2,20}(?:中学|小学|大学|学院)", "某学校"),
+        (
+            r"(?:来自|均来自|都是来自)?(?:富裕|贫困|低收入|高收入|中产)(?:家庭|背景|群体)?",
+            "具有不同家庭背景",
+        ),
+    )
+    for pattern, replacement in replacements:
+        sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
+    return sanitized.strip()
