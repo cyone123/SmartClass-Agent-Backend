@@ -89,7 +89,7 @@ def test_run_skill_script_remains_available_without_workspace_permissions(tmp_pa
     scripts_dir = skill_root / "scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)
     (scripts_dir / "echo.py").write_text(
-        "import sys\nprint('args=' + '|'.join(sys.argv[1:]))\n",
+        "import sys\nprint('中文输出')\nprint('args=' + '|'.join(sys.argv[1:]))\n",
         encoding="utf-8",
     )
 
@@ -105,4 +105,5 @@ def test_run_skill_script_remains_available_without_workspace_permissions(tmp_pa
     )
 
     assert "Exit code: 0" in response
+    assert "中文输出" in response
     assert "args=one|two" in response

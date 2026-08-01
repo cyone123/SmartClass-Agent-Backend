@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import inspect
 import json
 import re
@@ -61,6 +62,7 @@ from app.core.observability import (
     record_metric,
     run_context_from_config,
 )
+from app.core.office_artifacts import normalize_pptx_presentation_order
 from app.core.progress import (
     ProgressReporter,
     ProgressTracker,
@@ -86,6 +88,11 @@ StreamEventEmitter = Callable[[dict[str, Any]], None]
 ArtifactEventEmitter = StreamEventEmitter
 ArtifactTraceEventEmitter = StreamEventEmitter
 ArtifactTraceEntryKind = Literal["status", "tool_call", "tool_result", "ai_message"]
+
+_ACTIVE_AGENT_CONFIG: contextvars.ContextVar[RunnableConfig | None] = contextvars.ContextVar(
+    "active_agent_config",
+    default=None,
+)
 
 ROOT_STREAMING_NODES = {
     "normal_chat_node",
@@ -590,7 +597,7 @@ class LLMObservationMiddleware(AgentMiddleware):
             configurable = state.get("configurable")
             if isinstance(configurable, dict):
                 return {"configurable": configurable}
-        return None
+        return _ACTIVE_AGENT_CONFIG.get()
 
     def _request_messages(self, request: ModelRequest) -> list[AnyMessage]:
         messages = getattr(request, "messages", None)
@@ -1367,53 +1374,57 @@ class AgentRuntime:
     ) -> dict[str, Any] | None:
         last_ai_message: AIMessage | None = None
 
-        async for chunk in agent_runnable.astream(
-            {"messages": [{"role": "user", "content": prompt}]},
-            config=agent_config,
-            stream_mode="updates",
-            version="v2",
-        ):
-            if chunk.get("type") != "updates":
-                continue
-
-            chunk_data = chunk.get("data")
-            if not isinstance(chunk_data, dict):
-                continue
-
-            for step, data in chunk_data.items():
-                if not isinstance(data, dict):
+        config_token = _ACTIVE_AGENT_CONFIG.set(agent_config)
+        try:
+            async for chunk in agent_runnable.astream(
+                {"messages": [{"role": "user", "content": prompt}]},
+                config=agent_config,
+                stream_mode="updates",
+                version="v2",
+            ):
+                if chunk.get("type") != "updates":
                     continue
 
-                raw_messages = data.get("messages") or []
-                if step == "model":
-                    model_messages = [message for message in raw_messages if isinstance(message, AIMessage)]
-                    if not model_messages:
+                chunk_data = chunk.get("data")
+                if not isinstance(chunk_data, dict):
+                    continue
+
+                for step, data in chunk_data.items():
+                    if not isinstance(data, dict):
                         continue
 
-                    last_ai_message = model_messages[-1]
-                    ai_text = _normalize_trace_content(_message_to_text(last_ai_message))
-                    if ai_text:
-                        emit_trace_entry(
-                            "ai_message",
-                            "AI 输出",
-                            content=ai_text,
-                        )
+                    raw_messages = data.get("messages") or []
+                    if step == "model":
+                        model_messages = [message for message in raw_messages if isinstance(message, AIMessage)]
+                        if not model_messages:
+                            continue
 
-                    for tool_call in last_ai_message.tool_calls or []:
-                        emit_trace_entry(
-                            "tool_call",
-                            _artifact_trace_tool_call_title(tool_call),
-                            content=_normalize_trace_content(tool_call.get("args")),
-                        )
+                        last_ai_message = model_messages[-1]
+                        ai_text = _normalize_trace_content(_message_to_text(last_ai_message))
+                        if ai_text:
+                            emit_trace_entry(
+                                "ai_message",
+                                "AI 输出",
+                                content=ai_text,
+                            )
 
-                if step == "tools":
-                    tool_messages = [message for message in raw_messages if isinstance(message, ToolMessage)]
-                    for tool_message in tool_messages:
-                        emit_trace_entry(
-                            "tool_result",
-                            _artifact_trace_tool_result_title(tool_message),
-                            content=_normalize_trace_content(tool_message.content),
-                        )
+                        for tool_call in last_ai_message.tool_calls or []:
+                            emit_trace_entry(
+                                "tool_call",
+                                _artifact_trace_tool_call_title(tool_call),
+                                content=_normalize_trace_content(tool_call.get("args")),
+                            )
+
+                    if step == "tools":
+                        tool_messages = [message for message in raw_messages if isinstance(message, ToolMessage)]
+                        for tool_message in tool_messages:
+                            emit_trace_entry(
+                                "tool_result",
+                                _artifact_trace_tool_result_title(tool_message),
+                                content=_normalize_trace_content(tool_message.content),
+                            )
+        finally:
+            _ACTIVE_AGENT_CONFIG.reset(config_token)
 
         if last_ai_message is None:
             return None
@@ -1904,6 +1915,18 @@ class AgentRuntime:
                         artifact_type=artifact_type,
                         config=agent_config,
                     )
+                )
+
+            if artifact_type == "ppt" and normalize_pptx_presentation_order(output_path):
+                log_observation(
+                    "artifact.ooxml.normalized",
+                    context=artifact_context,
+                    sink=observation_sink,
+                    status="success",
+                    fields={
+                        "artifact_type": artifact_type,
+                        "repair": "presentation_notes_master_order",
+                    },
                 )
 
             async with AsyncSessionLocal() as db:

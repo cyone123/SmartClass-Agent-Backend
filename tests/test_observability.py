@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
 from app.api.chat import router as chat_router
-from app.core.agent import LLMObservationMiddleware, get_agent_runtime
+from app.core.agent import AgentRuntime, LLMObservationMiddleware, get_agent_runtime
 from app.core.auth import get_current_user
 from app.core.llm import get_model
 from app.core.observability import (
@@ -529,6 +529,52 @@ def test_llm_observation_middleware_records_model_token_usage_and_context() -> N
     assert event.fields["input_tokens"] == 10
     assert event.fields["output_tokens"] == 3
     assert event.fields["total_tokens"] == 13
+
+
+def test_artifact_stream_propagates_config_to_model_middleware() -> None:
+    sink = MemoryObservationSink()
+    config = {
+        "configurable": {
+            "thread_id": "thread-1",
+            "run_id": "run-1-ppt",
+            "plan_id": 1,
+            "user_id": "2",
+            "observation_sink": sink,
+        }
+    }
+    middleware = LLMObservationMiddleware(agent_name="artifact_ppt_agent")
+
+    class FakeRunnable:
+        async def astream(self, *args, **kwargs):
+            _ = (args, kwargs)
+            request = SimpleNamespace(
+                state={"messages": [HumanMessage(content="make slides")]},
+                model=SimpleNamespace(model_name="fake-model"),
+            )
+            message = AIMessage(content="done")
+            message.usage_metadata = {
+                "input_tokens": 12,
+                "output_tokens": 4,
+                "total_tokens": 16,
+            }
+            middleware.wrap_model_call(request, lambda _: ModelResponse(result=[message]))
+            yield {"type": "updates", "data": {"model": {"messages": [message]}}}
+
+    async def run() -> None:
+        runtime = AgentRuntime.__new__(AgentRuntime)
+        result = await runtime._stream_artifact_agent_updates(
+            FakeRunnable(),
+            prompt="make slides",
+            agent_config=config,
+            emit_trace_entry=lambda *args, **kwargs: None,
+        )
+        assert result is not None
+
+    asyncio.run(run())
+
+    event = next(event for event in sink.events if event.event == "llm.call")
+    assert event.context.run_id == "run-1-ppt"
+    assert event.fields["total_tokens"] == 16
 
 
 def test_chat_stream_passes_run_context_to_agent_runtime() -> None:

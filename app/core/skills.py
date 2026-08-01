@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import locale
 import os
 import re
 import subprocess
@@ -120,6 +121,25 @@ def _truncate_output(text: str) -> str:
     if truncated:
         result = f"{result}\n...[truncated]"
     return result
+
+
+def _decode_script_output(raw: bytes | str | None) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw
+
+    tried: set[str] = set()
+    for encoding in ("utf-8", locale.getpreferredencoding(False), "gbk"):
+        normalized = (encoding or "").strip()
+        if not normalized or normalized in tried:
+            continue
+        tried.add(normalized)
+        try:
+            return raw.decode(normalized)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
 
 
 def _split_frontmatter(raw_text: str, *, source: Path) -> tuple[dict[str, object], str]:
@@ -710,7 +730,7 @@ class SkillRegistry:
                 command,
                 cwd=skill.root_path,
                 capture_output=True,
-                text=True,
+                text=False,
                 timeout=timeout_seconds,
                 check=False,
             )
@@ -718,12 +738,12 @@ class SkillRegistry:
                 skill_name=skill.name,
                 script_path=resolved_path.relative_to(skill.root_path).as_posix(),
                 exit_code=completed.returncode,
-                stdout=_truncate_output(completed.stdout),
-                stderr=_truncate_output(completed.stderr),
+                stdout=_truncate_output(_decode_script_output(completed.stdout)),
+                stderr=_truncate_output(_decode_script_output(completed.stderr)),
             )
         except subprocess.TimeoutExpired as exc:
-            stdout = _truncate_output(exc.stdout or "")
-            stderr = _truncate_output(exc.stderr or "")
+            stdout = _truncate_output(_decode_script_output(exc.stdout))
+            stderr = _truncate_output(_decode_script_output(exc.stderr))
             return SkillScriptResult(
                 skill_name=skill.name,
                 script_path=resolved_path.relative_to(skill.root_path).as_posix(),

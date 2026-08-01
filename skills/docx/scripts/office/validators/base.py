@@ -760,7 +760,10 @@ class BaseSchemaValidator:
                 )
                 schema = lxml.etree.XMLSchema(xsd_doc)
 
-            with open(xml_file, "r") as f:
+            # Parse bytes so the XML declaration controls decoding. Text mode
+            # uses the host locale (GBK on many Windows installations), which
+            # incorrectly rejects valid UTF-8 OOXML containing Chinese text.
+            with open(xml_file, "rb") as f:
                 xml_doc = lxml.etree.parse(f)
 
             xml_doc, _ = self._remove_template_tags_from_text_nodes(xml_doc)

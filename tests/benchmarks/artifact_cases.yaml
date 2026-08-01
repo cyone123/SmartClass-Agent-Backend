@@ -1,0 +1,96 @@
+schema_version: "1.0"
+cases:
+  - case_id: math_pythagorean
+    subject: 数学
+    grade: 八年级
+    topic: 勾股定理
+    duration_minutes: 45
+    objectives:
+      - 理解直角三角形三边关系
+      - 能用勾股定理解决测量问题
+      - 能说明定理成立的必要条件
+    required_term_groups:
+      - [勾股定理]
+      - [直角三角形]
+      - [旗杆, 测高]
+      - [形成性评价, 即时反馈]
+    open_question: 教室是否配备投影设备
+    plan: >-
+      以校园旗杆测高为情境，通过面积拼图、符号表达和小组测量三个活动理解勾股定理。
+      教师需要显式区分直角边与斜边，安排基础支架、进阶挑战和形成性评价，最后用退出条收集学习证据。
+
+  - case_id: chinese_narrative
+    subject: 语文
+    grade: 五年级
+    topic: 记叙文人物描写
+    duration_minutes: 45
+    objectives:
+      - 识别动作、语言和神态描写
+      - 从关键语句推断人物品质
+      - 完成一段有证据的人物描写
+    required_term_groups:
+      - [人物描写]
+      - [动作描写, 动作]
+      - [语言描写, 语言]
+      - [文本证据, 关键语句]
+    open_question: 是否需要布置课后续写
+    plan: >-
+      使用短篇记叙文片段，引导学生圈画动作、语言和神态描写，通过证据卡片说明人物品质。
+      课堂包含示范批注、小组比较、迁移写作和同伴反馈，禁止脱离文本证据给人物贴标签。
+
+  - case_id: physics_projectile
+    subject: 物理
+    grade: 高一
+    topic: 平抛运动
+    duration_minutes: 45
+    objectives:
+      - 理解平抛运动的运动分解
+      - 分析水平和竖直方向的规律
+      - 根据参数变化预测运动轨迹
+    required_term_groups:
+      - [平抛运动]
+      - [运动分解]
+      - [水平方向]
+      - [竖直方向]
+    open_question: 是否允许学生使用计算器
+    plan: >-
+      从水平飞出的小球录像切入，将平抛运动分解为水平方向匀速运动与竖直方向自由落体运动。
+      学生通过参数表和轨迹预测比较初速度、下落高度对结果的影响，并用检查题纠正常见误区。
+
+  - case_id: chemistry_indicator
+    subject: 化学
+    grade: 九年级
+    topic: 酸碱指示剂
+    duration_minutes: 45
+    objectives:
+      - 认识常见酸碱指示剂的变色规律
+      - 根据实验现象判断溶液性质
+      - 遵守课堂实验安全规范
+    required_term_groups:
+      - [酸碱指示剂, 指示剂]
+      - [石蕊]
+      - [酚酞]
+      - [实验安全, 安全规范]
+    open_question: 实验材料是否由教师统一分发
+    plan: >-
+      采用安全的微型实验比较石蕊和酚酞在不同溶液中的颜色变化，学生先预测再记录现象。
+      强调护目镜、禁止品尝和教师统一处理试剂，使用观察表形成结论，不提供危险配制或家庭实验步骤。
+
+  - case_id: computing_sorting
+    subject: 信息技术
+    grade: 七年级
+    topic: 冒泡排序
+    duration_minutes: 45
+    objectives:
+      - 理解相邻元素比较与交换
+      - 跟踪一轮冒泡排序的状态变化
+      - 比较有序和逆序输入的执行过程
+    required_term_groups:
+      - [冒泡排序]
+      - [相邻元素]
+      - [比较]
+      - [交换]
+    open_question: 机房是否支持学生两人一组
+    plan: >-
+      通过数字卡片排队活动建立冒泡排序模型，逐步展示相邻元素比较、交换和每轮最大值归位。
+      学生填写状态跟踪表，再使用不同输入预测比较次数，最后以错误代码诊断检查理解。
