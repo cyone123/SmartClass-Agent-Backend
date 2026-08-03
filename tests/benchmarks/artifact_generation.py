@@ -10,6 +10,7 @@ import platform
 import shutil
 import statistics
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -185,6 +186,8 @@ def classify_failure(error: str | None) -> str | None:
     lowered = error.casefold()
     if "timeout" in lowered or "timed out" in lowered:
         return "timeout"
+    if "529" in lowered or "temporarily overloaded" in lowered or "service overloaded" in lowered:
+        return "model_overloaded"
     if "pptxgenjs" in lowered or "cannot find module" in lowered or "dependency" in lowered:
         return "dependency"
     if "no generated artifact" in lowered or "no artifact file" in lowered:
@@ -657,6 +660,7 @@ def _git_metadata() -> tuple[str, bool]:
 def _source_fingerprint() -> str:
     paths = [
         BACKEND_ROOT / "app" / "core" / "agent.py",
+        BACKEND_ROOT / "app" / "core" / "llm.py",
         BACKEND_ROOT / "app" / "services" / "artifact_service.py",
         BACKEND_ROOT / "skills" / "ppt-generator" / "SKILL.md",
         BACKEND_ROOT / "skills" / "docx" / "SKILL.md",
@@ -803,12 +807,14 @@ async def run_experiment(args: argparse.Namespace) -> tuple[dict[str, Any], Path
         "model": {
             "name": str(getattr(model, "model_name", "unknown")),
             "provider": _provider_name(str(getattr(model, "openai_api_base", "") or "")),
+            "thinking_mode": os.getenv("MODEL_THINKING_MODE") or None,
         },
         "runtime": {
             "workspace_backend": get_workspace_execution_backend(),
             "storage_backend": get_storage_backend(),
             "artifact_timeout_seconds": args.timeout_seconds,
             "office_visual_validation": False,
+            "python_utf8_mode": bool(sys.flags.utf8_mode),
         },
         "preflight": preflight,
         "attempts": [],

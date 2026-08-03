@@ -50,6 +50,16 @@ def _stream_usage_kwargs(streaming: bool) -> dict[str, bool]:
     return {"stream_usage": True}
 
 
+def _thinking_mode_kwargs(env_name: str = "MODEL_THINKING_MODE") -> dict[str, object]:
+    raw_value = os.getenv(env_name)
+    if raw_value is None or not raw_value.strip():
+        return {}
+    mode = raw_value.strip().lower()
+    if mode not in {"enabled", "disabled"}:
+        raise ValueError(f"{env_name} must be 'enabled' or 'disabled'")
+    return {"extra_body": {"thinking": {"type": mode}}}
+
+
 def get_model(*, streaming: bool = False) -> ChatOpenAI:
     return ChatOpenAI(
         model=os.getenv("MODEL"),
@@ -57,6 +67,7 @@ def get_model(*, streaming: bool = False) -> ChatOpenAI:
         base_url=os.getenv("BASE_URL"),
         streaming=streaming,
         **_stream_usage_kwargs(streaming),
+        **_thinking_mode_kwargs(),
     )
 
 

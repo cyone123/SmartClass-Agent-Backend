@@ -89,6 +89,13 @@ ArtifactEventEmitter = StreamEventEmitter
 ArtifactTraceEventEmitter = StreamEventEmitter
 ArtifactTraceEntryKind = Literal["status", "tool_call", "tool_result", "ai_message"]
 
+ARTIFACT_EXECUTION_CONTRACT = (
+    "Execution contract: this is a file-generation job, not a planning or advisory response. "
+    "Use the available tools to create the requested file during this run. "
+    "Before returning a final response, verify that the final artifact exists under AGENT_OUTPUT_DIR. "
+    "A final response without a generated file is a failed job."
+)
+
 _ACTIVE_AGENT_CONFIG: contextvars.ContextVar[RunnableConfig | None] = contextvars.ContextVar(
     "active_agent_config",
     default=None,
@@ -912,7 +919,7 @@ class AgentRuntime:
         return create_agent(
             model=get_model(streaming=False),
             tools=self.skill_toolset.tools + self.workspace_toolset.tools,
-            system_prompt=system_prompt,
+            system_prompt=f"{system_prompt}\n\n{ARTIFACT_EXECUTION_CONTRACT}",
             middleware=middleware,
             name=agent_name,
         )
@@ -1451,16 +1458,19 @@ class AgentRuntime:
 
         artifact_instruction = {
             "ppt": (
+                "This branch is responsible only for the PPTX artifact; ignore requests for DOCX or HTML. "
                 "Generate a real `.pptx` teaching deck. "
                 "You must load and follow the `ppt-generator` skill, then write the final file to `AGENT_OUTPUT_DIR`."
             ),
             "docx": (
+                "This branch is responsible only for the DOCX artifact; ignore requests for PPTX or HTML. "
                 "Generate a real `.docx` lesson-plan document. "
                 "You must load and follow the `docx` skill, then write the final file to `AGENT_OUTPUT_DIR`."
             ),
             "html-game": (
+                "This branch is responsible only for the HTML artifact; ignore requests for PPTX or DOCX. "
                 "Generate a single runnable `.html` interactive activity or experiment page. "
-                "You must load and follow the `html-interactive` skill, then write the final file to your workspace."
+                "You must load and follow the `html-interactive` skill, then write the final file to `AGENT_OUTPUT_DIR`."
             ),
         }[artifact_type]
 
@@ -1471,6 +1481,7 @@ class AgentRuntime:
             f"Teaching design plan:\n{teaching_design_plan}\n\n"
             f"Retrieved context:\n{rag_context}\n\n"
             f"Long-term memory context:\n{memory_context or 'None'}\n\n"
+            f"{ARTIFACT_EXECUTION_CONTRACT}\n\n"
             "If required dependencies are missing, explain the missing dependency clearly. "
             "Do not use shell to install anything."
         )

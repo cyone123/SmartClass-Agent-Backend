@@ -77,6 +77,7 @@ def test_incomplete_sample_fails_evidence_gate() -> None:
 
 def test_failure_classification_is_bounded() -> None:
     assert classify_failure("request timed out") == "timeout"
+    assert classify_failure("Error code: 529 - Service temporarily overloaded") == "model_overloaded"
     assert classify_failure("Cannot find module pptxgenjs") == "dependency"
     assert classify_failure("No generated artifact file was detected") == "no_output"
     assert classify_failure("Connection error.") == "model"

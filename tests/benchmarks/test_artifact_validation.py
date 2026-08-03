@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 
 from docx import Document
+from lxml import etree
 
 from tests.benchmarks.artifact_validation import (
     _run_office_schema_validator,
@@ -108,6 +109,25 @@ def test_office_schema_validator_does_not_decode_chinese_ooxml_as_gbk(tmp_path: 
     _, output = _run_office_schema_validator(artifact, backend_root)
 
     assert "codec can't decode" not in output
+
+
+def test_core_properties_schema_compiles_with_local_imports() -> None:
+    backend_root = Path(__file__).resolve().parents[2]
+    schema_path = (
+        backend_root
+        / "skills"
+        / "docx"
+        / "scripts"
+        / "office"
+        / "schemas"
+        / "ecma"
+        / "fouth-edition"
+        / "opc-coreProperties.xsd"
+    )
+
+    schema = etree.XMLSchema(etree.parse(schema_path))
+
+    assert schema is not None
 
 
 def test_pptx_validator_rejects_incomplete_package(tmp_path: Path) -> None:

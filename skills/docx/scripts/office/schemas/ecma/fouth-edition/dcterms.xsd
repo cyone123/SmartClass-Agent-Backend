@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+  targetNamespace="http://purl.org/dc/terms/"
+  xmlns:dcterms="http://purl.org/dc/terms/"
+  elementFormDefault="qualified">
+  <xs:simpleType name="W3CDTF">
+    <xs:restriction base="xs:dateTime"/>
+  </xs:simpleType>
+  <xs:element name="created" type="dcterms:W3CDTF"/>
+  <xs:element name="modified" type="dcterms:W3CDTF"/>
+</xs:schema>
