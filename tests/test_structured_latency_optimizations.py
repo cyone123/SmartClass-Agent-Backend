@@ -13,6 +13,17 @@ class FakeModel:
     openai_api_base: str
 
 
+class StructuredOutputBuilder:
+    def __init__(self, model_name: str, openai_api_base: str) -> None:
+        self.model_name = model_name
+        self.openai_api_base = openai_api_base
+        self.calls: list[tuple[object, dict[str, object]]] = []
+
+    def with_structured_output(self, schema, **kwargs):
+        self.calls.append((schema, kwargs))
+        return object()
+
+
 class FakeRunnable:
     def __init__(self, response=None, error: Exception | None = None) -> None:
         self.response = response
@@ -25,6 +36,29 @@ class FakeRunnable:
         if self.error is not None:
             raise self.error
         return self.response
+
+
+def test_deepseek_structured_output_uses_provider_defaults() -> None:
+    model = StructuredOutputBuilder("deepseek-v4-flash", "https://api.deepseek.com")
+
+    graph_module._with_structured_output(model, graph_module.ConversationRoute)
+
+    assert model.calls == [
+        (graph_module.ConversationRoute, {"method": "function_calling", "include_raw": True})
+    ]
+
+
+def test_non_deepseek_structured_output_keeps_explicit_contract() -> None:
+    model = StructuredOutputBuilder("qwen-structured", "https://dashscope.example.com/v1")
+
+    graph_module._with_structured_output(model, graph_module.ConversationRoute)
+
+    assert model.calls == [
+        (
+            graph_module.ConversationRoute,
+            {"method": "json_schema", "strict": True, "include_raw": True},
+        )
+    ]
 
 
 def test_build_metadata_extraction_messages_limits_context_to_recent_human_turns() -> None:

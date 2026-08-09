@@ -157,30 +157,32 @@ class ConversationRoute(BaseModel):
     )
 
 
-router = structured_fast_llm.with_structured_output(
-    ConversationRoute,
-    method=STRUCTURED_METHOD,
-    strict=STRUCTURED_STRICT,
-    include_raw=True,
-)
-router_fallback = structured_output_llm.with_structured_output(
-    ConversationRoute,
-    method=STRUCTURED_METHOD,
-    strict=STRUCTURED_STRICT,
-    include_raw=True,
-)
-metadata_extractor = structured_fast_llm.with_structured_output(
-    TeachingMetadata,
-    method=STRUCTURED_METHOD,
-    strict=STRUCTURED_STRICT,
-    include_raw=True,
-)
-metadata_extractor_fallback = structured_output_llm.with_structured_output(
-    TeachingMetadata,
-    method=STRUCTURED_METHOD,
-    strict=STRUCTURED_STRICT,
-    include_raw=True,
-)
+def _is_deepseek_model(model: Any) -> bool:
+    model_name = str(getattr(model, "model_name", None) or getattr(model, "model", None) or "").lower()
+    base_url = str(getattr(model, "openai_api_base", None) or getattr(model, "base_url", None) or "").lower()
+    return "deepseek" in model_name or "deepseek.com" in base_url
+
+
+def _structured_output_kwargs(model: Any) -> dict[str, Any]:
+    """Use DeepSeek tool calling and provider-specific thinking settings."""
+
+    if _is_deepseek_model(model):
+        return {"method": "function_calling", "include_raw": True}
+    return {
+        "method": STRUCTURED_METHOD,
+        "strict": STRUCTURED_STRICT,
+        "include_raw": True,
+    }
+
+
+def _with_structured_output(model: Any, schema: type[BaseModel]) -> Any:
+    return model.with_structured_output(schema, **_structured_output_kwargs(model))
+
+
+router = _with_structured_output(structured_fast_llm, ConversationRoute)
+router_fallback = _with_structured_output(structured_output_llm, ConversationRoute)
+metadata_extractor = _with_structured_output(structured_fast_llm, TeachingMetadata)
+metadata_extractor_fallback = _with_structured_output(structured_output_llm, TeachingMetadata)
 
 
 def build_input_messages(
@@ -471,8 +473,8 @@ def _log_structured_call(
         "schema_invocation_index": schema_invocation_index,
         "model": _structured_model_name(model),
         "provider_tag": _structured_provider_tag(model),
-        "structured_method": STRUCTURED_METHOD,
-        "strict": STRUCTURED_STRICT,
+        "structured_method": "function_calling" if _is_deepseek_model(model) else STRUCTURED_METHOD,
+        "strict": None if _is_deepseek_model(model) else STRUCTURED_STRICT,
         "input_message_count": len(messages),
         "input_size": _estimate_input_size(messages),
         "output_chars": _estimate_output_size(response),

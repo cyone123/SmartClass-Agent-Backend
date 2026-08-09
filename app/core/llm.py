@@ -60,6 +60,15 @@ def _thinking_mode_kwargs(env_name: str = "MODEL_THINKING_MODE") -> dict[str, ob
     return {"extra_body": {"thinking": {"type": mode}}}
 
 
+def _structured_thinking_kwargs(model: str | None, base_url: str | None) -> dict[str, object]:
+    """Disable DeepSeek thinking when structured output uses tool calling."""
+
+    provider_text = f"{model or ''} {base_url or ''}".lower()
+    if "deepseek" in provider_text:
+        return {"extra_body": {"thinking": {"type": "disabled"}}}
+    return {}
+
+
 def get_model(*, streaming: bool = False) -> ChatOpenAI:
     return ChatOpenAI(
         model=os.getenv("MODEL"),
@@ -72,13 +81,16 @@ def get_model(*, streaming: bool = False) -> ChatOpenAI:
 
 
 def get_structured_output_model(*, streaming: bool = False) -> ChatOpenAI:
+    model = os.getenv("STRUCTED_MDOEL")
+    base_url = os.getenv("STRUCTED_BASE_URL")
     return ChatOpenAI(
-        model=os.getenv("STRUCTED_MDOEL"),
+        model=model,
         api_key=os.getenv("STRUCTED_API_KEY"),
-        base_url=os.getenv("STRUCTED_BASE_URL"),
+        base_url=base_url,
         streaming=streaming,
         timeout=_get_timeout_seconds(),
         **_stream_usage_kwargs(streaming),
+        **_structured_thinking_kwargs(model, base_url),
     )
 
 
@@ -167,13 +179,16 @@ def get_context_compression_llm(*, streaming: bool = False) -> ChatOpenAI:
 
 
 def get_structured_fast_model(*, streaming: bool = False) -> ChatOpenAI:
+    model = _first_non_empty_env("STRUCTURED_FAST_MODEL", "SMALL_MDOEL")
+    base_url = _first_non_empty_env("STRUCTURED_FAST_BASE_URL", "SMALL_BASE_URL")
     return ChatOpenAI(
-        model=_first_non_empty_env("STRUCTURED_FAST_MODEL", "SMALL_MDOEL"),
+        model=model,
         api_key=_first_non_empty_env("STRUCTURED_FAST_API_KEY", "SMALL_API_KEY"),
-        base_url=_first_non_empty_env("STRUCTURED_FAST_BASE_URL", "SMALL_BASE_URL"),
+        base_url=base_url,
         streaming=streaming,
         timeout=_get_timeout_seconds(),
         **_stream_usage_kwargs(streaming),
+        **_structured_thinking_kwargs(model, base_url),
     )
 
 
