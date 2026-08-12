@@ -3,8 +3,6 @@ name: Agent Evaluation
 on:
   pull_request:
     branches: [main]
-  schedule:
-    - cron: "0 20 * * *" # 北京时间每日 04:00 巡检
   workflow_dispatch:
 
 concurrency:
